@@ -288,6 +288,18 @@ export const AntigravityConfigSchema = z.object({
   cli_first: z.boolean().default(false),
   
   /**
+   * When all Claude accounts are rate-limited, automatically fall back to a Gemini model.
+   * @default true
+   */
+  cross_family_fallback: z.boolean().default(true),
+
+  /**
+   * The Gemini model to fall back to when Claude is fully rate-limited.
+   * @default "antigravity-gemini-3.1-pro"
+   */
+  cross_family_fallback_model: z.string().default("antigravity-gemini-3.1-pro"),
+
+  /**
    * Strategy for selecting accounts when making requests.
    * Env override: OPENCODE_ANTIGRAVITY_ACCOUNT_SELECTION_STRATEGY
    * @default "hybrid"
@@ -466,6 +478,8 @@ export const DEFAULT_CONFIG: AntigravityConfig = {
   max_rate_limit_wait_seconds: 300,
   quota_fallback: false,
   cli_first: false,
+  cross_family_fallback: true,
+  cross_family_fallback_model: "antigravity-gemini-3.1-pro",
   account_selection_strategy: 'hybrid',
   pid_offset_enabled: false,
   switch_on_first_rate_limit: true,

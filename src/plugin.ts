@@ -1465,9 +1465,10 @@ export const createAntigravityPlugin = (providerId: string) => async (
             throw new Error("No Antigravity accounts configured. Run `opencode auth login`.");
           }
 
-          const urlString = toUrlString(input);
-          const family = getModelFamilyFromUrl(urlString);
-          const model = extractModelFromUrl(urlString);
+          let urlString = toUrlString(input);
+          let family = getModelFamilyFromUrl(urlString);
+          let model = extractModelFromUrl(urlString);
+          let crossFamilyFallbackApplied = false;
           const debugLines: string[] = [];
           const pushDebug = (line: string) => {
             if (!isDebugEnabled()) return;
@@ -1592,6 +1593,32 @@ export const createAntigravityPlugin = (providerId: string) => async (
             }
             
             if (!account) {
+              // Cross-family fallback: if Claude is fully rate-limited, try Gemini
+              if (family === "claude" && config.cross_family_fallback && !crossFamilyFallbackApplied) {
+                const fallbackModel = config.cross_family_fallback_model ?? "antigravity-gemini-3.1-pro";
+                pushDebug(`cross-family-fallback: claude->gemini model=${fallbackModel}`);
+                const newUrlString = urlString.replace(/\/models\/[^:\/?]+/, `/models/${fallbackModel}`);
+                const newFamily = getModelFamilyFromUrl(newUrlString) as ModelFamily;
+                const newModel = extractModelFromUrl(newUrlString);
+                
+                // Try to find a Gemini account immediately
+                const geminiAccount = accountManager.getCurrentOrNextForFamily(
+                  newFamily, newModel, config.account_selection_strategy,
+                  preferredHeaderStyle, config.pid_offset_enabled,
+                  config.soft_quota_threshold_percent, softQuotaCacheTtlMs
+                );
+                
+                if (geminiAccount) {
+                  urlString = newUrlString;
+                  input = urlString as RequestInfo;
+                  family = newFamily;
+                  model = newModel;
+                  crossFamilyFallbackApplied = true;
+                  await showToast(`Claude rate-limited. Falling back to ${fallbackModel}.`, "warning");
+                  continue; // loop restarts with new urlString/family/model
+                }
+              }
+
               if (accountManager.areAllAccountsOverSoftQuota(family, config.soft_quota_threshold_percent, softQuotaCacheTtlMs, model)) {
                 const threshold = config.soft_quota_threshold_percent;
                 const softQuotaWaitMs = accountManager.getMinWaitTimeForSoftQuota(family, threshold, softQuotaCacheTtlMs, model);
