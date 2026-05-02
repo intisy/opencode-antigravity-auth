@@ -577,3 +577,231 @@ export function wrapToolsAsFunctionDeclarations(payload: RequestPayload): WrapTo
     passthroughToolCount: passthroughTools.length + (hasWebSearchTool && functionDeclarations.length === 0 ? 1 : 0),
   };
 }
+
+// ============================================================================
+// GEMINI CONVERSATION TURN SANITIZER
+// Fixes: "function call turn comes immediately after a user turn or after a
+// function response turn" — Gemini enforces strict turn ordering that
+// OpenCode's Claude-compatible conversation format can violate.
+// ============================================================================
+
+interface ContentTurn {
+  role: string;
+  parts: any[];
+  [key: string]: unknown;
+}
+
+/**
+ * Separate parts into functionCall/functionResponse parts and other parts.
+ */
+function separateParts(parts: any[]): {
+  functionCallParts: any[];
+  functionResponseParts: any[];
+  otherParts: any[];
+} {
+  const functionCallParts: any[] = [];
+  const functionResponseParts: any[] = [];
+  const otherParts: any[] = [];
+
+  for (const part of parts) {
+    if (!part || typeof part !== "object") {
+      otherParts.push(part);
+      continue;
+    }
+    if (part.functionCall || part.function_call) {
+      functionCallParts.push(part);
+    } else if (part.functionResponse || part.function_response) {
+      functionResponseParts.push(part);
+    } else {
+      otherParts.push(part);
+    }
+  }
+
+  return { functionCallParts, functionResponseParts, otherParts };
+}
+
+/**
+ * Sanitize Gemini conversation contents to enforce strict turn ordering.
+ *
+ * Gemini API rules:
+ * 1. Strict user/model alternation (no consecutive same-role turns)
+ * 2. functionCall parts must be in "model" role turns
+ * 3. functionResponse parts must be in "user" role turns
+ * 4. Conversation must start with "user"
+ * 5. A function_call turn must come immediately after a user turn or
+ *    after a function_response turn
+ *
+ * This function:
+ * - Normalizes roles ("assistant" to "model")
+ * - Moves misplaced functionCall/functionResponse parts to correct roles
+ * - Merges consecutive same-role turns
+ * - Inserts empty filler turns to maintain alternation
+ * - Ensures conversation starts with "user"
+ */
+export function sanitizeGeminiContents(contents: any[]): any[] {
+  if (!Array.isArray(contents) || contents.length === 0) {
+    return contents;
+  }
+
+  // Phase 1: Normalize roles and fix misplaced function parts
+  const normalized: ContentTurn[] = [];
+
+  for (const content of contents) {
+    if (!content || typeof content !== "object") continue;
+
+    let role = content.role as string;
+    const parts = Array.isArray(content.parts) ? [...content.parts] : [];
+
+    if (parts.length === 0) continue;
+
+    // Normalize "assistant" to "model" for Gemini
+    if (role === "assistant") {
+      role = "model";
+    }
+
+    const { functionCallParts, functionResponseParts, otherParts } = separateParts(parts);
+
+    if (role === "model") {
+      // Model turn: keep functionCall + other parts, eject functionResponse
+      const modelParts = [...otherParts, ...functionCallParts];
+      if (modelParts.length > 0) {
+        normalized.push({ ...content, role: "model", parts: modelParts });
+      }
+      if (functionResponseParts.length > 0) {
+        normalized.push({ role: "user", parts: functionResponseParts });
+      }
+    } else if (role === "user") {
+      // User turn: keep functionResponse + other parts, eject functionCall
+      if (functionCallParts.length > 0) {
+        normalized.push({ role: "model", parts: functionCallParts });
+      }
+      const userParts = [...otherParts, ...functionResponseParts];
+      if (userParts.length > 0) {
+        normalized.push({ ...content, role: "user", parts: userParts });
+      }
+    } else {
+      normalized.push({ ...content, role, parts });
+    }
+  }
+
+  if (normalized.length === 0) {
+    return contents;
+  }
+
+  // Phase 2: Merge consecutive same-role turns
+  const merged: ContentTurn[] = [normalized[0]!];
+
+  for (let i = 1; i < normalized.length; i++) {
+    const current = normalized[i]!;
+    const previous = merged[merged.length - 1]!;
+
+    if (current.role === previous.role) {
+      previous.parts = [...previous.parts, ...current.parts];
+    } else {
+      merged.push(current);
+    }
+  }
+
+  // Phase 3: Ensure conversation starts with "user"
+  if (merged[0]!.role !== "user") {
+    merged.unshift({ role: "user", parts: [{ text: "" }] });
+  }
+
+  // Phase 4: Insert filler turns to enforce strict alternation
+  const result: ContentTurn[] = [merged[0]!];
+
+  for (let i = 1; i < merged.length; i++) {
+    const current = merged[i]!;
+    const previous = result[result.length - 1]!;
+
+    if (current.role === previous.role) {
+      const fillerRole = current.role === "model" ? "user" : "model";
+      result.push({ role: fillerRole, parts: [{ text: "" }] });
+    }
+    result.push(current);
+  }
+
+  return result;
+}
+
+/**
+ * Fix Gemini tool call/response pairing.
+ *
+ * Ensures every functionCall in a model turn has a matching functionResponse
+ * in the immediately following user turn. If not, injects a placeholder
+ * response to prevent the API from rejecting the request.
+ */
+export function fixGeminiToolPairing(contents: any[]): any[] {
+  if (!Array.isArray(contents) || contents.length === 0) {
+    return contents;
+  }
+
+  const result = contents.map((c: any) => ({
+    ...c,
+    parts: Array.isArray(c.parts) ? [...c.parts] : [],
+  }));
+
+  // Collect functionCall info from model turns
+  const callsByModelIdx = new Map<number, { name: string; id?: string }[]>();
+
+  for (let i = 0; i < result.length; i++) {
+    const turn = result[i];
+    if (turn.role !== "model") continue;
+
+    const calls: { name: string; id?: string }[] = [];
+    for (const part of turn.parts) {
+      const fc = part?.functionCall || part?.function_call;
+      if (!fc) continue;
+      calls.push({ name: fc.name || "unknown", id: fc.id || undefined });
+    }
+
+    if (calls.length > 0) {
+      callsByModelIdx.set(i, calls);
+    }
+  }
+
+  for (const [modelIdx, calls] of callsByModelIdx.entries()) {
+    const nextIdx = modelIdx + 1;
+    if (nextIdx >= result.length) {
+      const responseParts = calls.map((call) => ({
+        functionResponse: {
+          name: call.name,
+          ...(call.id ? { id: call.id } : {}),
+          response: { result: "[pending]" },
+        },
+      }));
+      result.push({ role: "user", parts: responseParts });
+      continue;
+    }
+
+    const nextTurn = result[nextIdx];
+    if (nextTurn.role !== "user") continue;
+
+    const existingResponseNames = new Set<string>();
+    const existingResponseIds = new Set<string>();
+
+    for (const part of nextTurn.parts) {
+      const fr = part?.functionResponse || part?.function_response;
+      if (!fr) continue;
+      if (fr.name) existingResponseNames.add(fr.name);
+      if (fr.id) existingResponseIds.add(fr.id);
+    }
+
+    for (const call of calls) {
+      const hasMatchById = call.id && existingResponseIds.has(call.id);
+      const hasMatchByName = existingResponseNames.has(call.name);
+
+      if (!hasMatchById && !hasMatchByName) {
+        nextTurn.parts.push({
+          functionResponse: {
+            name: call.name,
+            ...(call.id ? { id: call.id } : {}),
+            response: { result: "[no response received]" },
+          },
+        });
+      }
+    }
+  }
+
+  return result;
+}

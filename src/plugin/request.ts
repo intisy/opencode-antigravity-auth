@@ -58,7 +58,7 @@ import {
   needsThinkingRecovery,
 } from "./thinking-recovery";
 import { sanitizeCrossModelPayloadInPlace } from "./transform/cross-model-sanitizer";
-import { isGemini3Model, isImageGenerationModel, buildImageGenerationConfig, applyGeminiTransforms } from "./transform";
+import { isGemini3Model, isImageGenerationModel, buildImageGenerationConfig, applyGeminiTransforms, sanitizeGeminiContents, fixGeminiToolPairing } from "./transform";
 import {
   resolveModelWithTier,
   resolveModelWithVariant,
@@ -1275,6 +1275,12 @@ export function prepareAntigravityRequest(
             }
             requestPayload.tools = finalTools.concat(passthroughTools);
           } else {
+            // Gemini conversation turn sanitization
+            if (Array.isArray(requestPayload.contents)) {
+              requestPayload.contents = sanitizeGeminiContents(requestPayload.contents as any[]);
+              requestPayload.contents = fixGeminiToolPairing(requestPayload.contents as any[]);
+            }
+
             // Gemini-specific tool normalization and feature injection
             const geminiResult = applyGeminiTransforms(requestPayload, {
               model: effectiveModel,
