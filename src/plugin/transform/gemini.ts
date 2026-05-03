@@ -675,9 +675,11 @@ export function sanitizeGeminiContents(contents: any[]): any[] {
       if (functionCallParts.length > 0) {
         normalized.push({ role: "model", parts: functionCallParts });
       }
-      const userParts = [...otherParts, ...functionResponseParts];
-      if (userParts.length > 0) {
-        normalized.push({ ...content, role: "user", parts: userParts });
+      if (functionResponseParts.length > 0) {
+        normalized.push({ role: "user", parts: functionResponseParts });
+      }
+      if (otherParts.length > 0) {
+        normalized.push({ ...content, role: "user", parts: otherParts });
       }
     }
   }
@@ -693,7 +695,11 @@ export function sanitizeGeminiContents(contents: any[]): any[] {
     const current = normalized[i]!;
     const previous = merged[merged.length - 1]!;
 
-    if (current.role === previous.role) {
+    const hasFunc = (parts: any[]) => parts.some(p => p.functionCall || p.functionResponse || p.function_call || p.function_response);
+    const prevFunc = hasFunc(previous.parts);
+    const currFunc = hasFunc(current.parts);
+
+    if (current.role === previous.role && prevFunc === currFunc) {
       previous.parts = [...previous.parts, ...current.parts];
     } else {
       merged.push(current);
@@ -702,7 +708,7 @@ export function sanitizeGeminiContents(contents: any[]): any[] {
 
   // Phase 3: Ensure conversation starts with "user"
   if (merged[0]!.role !== "user") {
-    merged.unshift({ role: "user", parts: [{ text: "" }] });
+    merged.unshift({ role: "user", parts: [{ text: "acknowledged" }] });
   }
 
   // Phase 4: Insert filler turns to enforce strict alternation
@@ -714,7 +720,7 @@ export function sanitizeGeminiContents(contents: any[]): any[] {
 
     if (current.role === previous.role) {
       const fillerRole = current.role === "model" ? "user" : "model";
-      result.push({ role: fillerRole, parts: [{ text: "" }] });
+      result.push({ role: fillerRole, parts: [{ text: "acknowledged" }] });
     }
     result.push(current);
   }
