@@ -1467,6 +1467,9 @@ export function prepareAntigravityRequest(
         if (!isClaude && Array.isArray(requestPayload.contents)) {
           requestPayload.contents = sanitizeGeminiContents(requestPayload.contents as any[]);
           requestPayload.contents = fixGeminiToolPairing(requestPayload.contents as any[]);
+          // Run sanitizer a second time to split any mixed turns created by fixGeminiToolPairing
+          // and enforce strict alternation around newly injected functionResponse turns.
+          requestPayload.contents = sanitizeGeminiContents(requestPayload.contents as any[]);
         }
 
         const effectiveProjectId = projectId?.trim() || (headerStyle === "antigravity" ? generateSyntheticProjectId() : "");
