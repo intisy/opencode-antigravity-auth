@@ -1275,12 +1275,6 @@ export function prepareAntigravityRequest(
             }
             requestPayload.tools = finalTools.concat(passthroughTools);
           } else {
-            // Gemini conversation turn sanitization
-            if (Array.isArray(requestPayload.contents)) {
-              requestPayload.contents = sanitizeGeminiContents(requestPayload.contents as any[]);
-              requestPayload.contents = fixGeminiToolPairing(requestPayload.contents as any[]);
-            }
-
             // Gemini-specific tool normalization and feature injection
             const geminiResult = applyGeminiTransforms(requestPayload, {
               model: effectiveModel,
@@ -1465,6 +1459,15 @@ export function prepareAntigravityRequest(
 
         stripInjectedDebugFromRequestPayload(requestPayload);
         sanitizeRequestPayloadForAntigravity(requestPayload);
+
+        // Gemini conversation turn sanitization (must run AFTER sanitizeRequestPayloadForAntigravity
+        // so turns with only invalid parts e.g. type:"compaction" are already removed before
+        // structural enforcement. Prevents the post-compaction Gemini 400 turn-ordering error
+        // where the compaction model turn is later stripped leaving two consecutive user turns.)
+        if (!isClaude && Array.isArray(requestPayload.contents)) {
+          requestPayload.contents = sanitizeGeminiContents(requestPayload.contents as any[]);
+          requestPayload.contents = fixGeminiToolPairing(requestPayload.contents as any[]);
+        }
 
         const effectiveProjectId = projectId?.trim() || (headerStyle === "antigravity" ? generateSyntheticProjectId() : "");
         resolvedProjectId = effectiveProjectId;
