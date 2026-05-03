@@ -670,8 +670,8 @@ export function sanitizeGeminiContents(contents: any[]): any[] {
       if (functionResponseParts.length > 0) {
         normalized.push({ role: "user", parts: functionResponseParts });
       }
-    } else if (role === "user") {
-      // User turn: keep functionResponse + other parts, eject functionCall
+    } else {
+      // User or any other role (tool/system): treat as "user"
       if (functionCallParts.length > 0) {
         normalized.push({ role: "model", parts: functionCallParts });
       }
@@ -679,8 +679,6 @@ export function sanitizeGeminiContents(contents: any[]): any[] {
       if (userParts.length > 0) {
         normalized.push({ ...content, role: "user", parts: userParts });
       }
-    } else {
-      normalized.push({ ...content, role, parts });
     }
   }
 
