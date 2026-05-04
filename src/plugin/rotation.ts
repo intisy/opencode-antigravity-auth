@@ -255,6 +255,7 @@ export function selectHybridAccount(
 ): number | null {
   const candidates = accounts
     .filter(acc => 
+      !getLeaseTracker().isLeased(acc.index) &&
       !acc.isRateLimited && 
       !acc.isCoolingDown && 
       acc.healthScore >= minHealthScore &&
@@ -452,4 +453,49 @@ export function getHealthTracker(): HealthScoreTracker {
 export function initHealthTracker(config: Partial<HealthScoreConfig>): HealthScoreTracker {
   globalHealthTracker = new HealthScoreTracker(config);
   return globalHealthTracker;
+}
+
+// ============================================================================
+// LEASE & PROXY TRACKER
+// ============================================================================
+
+export class LeaseTracker {
+  private leasedAccounts = new Set<number>();
+  lease(accountIndex: number) { this.leasedAccounts.add(accountIndex); }
+  release(accountIndex: number) { this.leasedAccounts.delete(accountIndex); }
+  isLeased(accountIndex: number): boolean { return this.leasedAccounts.has(accountIndex); }
+}
+
+export class ProxyManager {
+  private proxyCooldowns = new Map<string, number>();
+  markCooldown(proxy: string, cooldownMs: number = 60000) {
+    this.proxyCooldowns.set(proxy, Date.now() + cooldownMs);
+  }
+  isCoolingDown(proxy: string): boolean {
+    const expiresAt = this.proxyCooldowns.get(proxy);
+    if (!expiresAt) return false;
+    if (Date.now() > expiresAt) {
+      this.proxyCooldowns.delete(proxy);
+      return false;
+    }
+    return true;
+  }
+  selectBestProxy(proxies?: string[]): string | undefined {
+    if (!proxies || proxies.length === 0) return undefined;
+    const available = proxies.filter(p => !this.isCoolingDown(p));
+    if (available.length === 0) return proxies[Math.floor(Math.random() * proxies.length)]; // fallback
+    return available[Math.floor(Math.random() * available.length)];
+  }
+}
+
+let globalLeaseTracker: LeaseTracker | null = null;
+export function getLeaseTracker(): LeaseTracker {
+  if (!globalLeaseTracker) globalLeaseTracker = new LeaseTracker();
+  return globalLeaseTracker;
+}
+
+let globalProxyManager: ProxyManager | null = null;
+export function getProxyManager(): ProxyManager {
+  if (!globalProxyManager) globalProxyManager = new ProxyManager();
+  return globalProxyManager;
 }

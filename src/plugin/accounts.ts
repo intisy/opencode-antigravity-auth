@@ -134,6 +134,7 @@ export interface ManagedAccount {
   access?: string;
   expires?: number;
   enabled: boolean;
+  proxies?: string[];
   rateLimitResetTimes: RateLimitStateV3;
   lastSwitchReason?: "rate-limit" | "initial" | "rotation";
   coolingDownUntil?: number;
@@ -344,6 +345,7 @@ export class AccountManager {
           return {
             index,
             email: acc.email,
+            proxies: acc.proxies,
             addedAt: clampNonNegativeInt(acc.addedAt, baseNow),
             lastUsed: clampNonNegativeInt(acc.lastUsed, 0),
             parts: {
@@ -996,6 +998,7 @@ export class AccountManager {
       version: 4,
       accounts: this.accounts.map((a) => ({
         email: a.email,
+        proxies: a.proxies,
         refreshToken: a.parts.refreshToken,
         projectId: a.parts.projectId,
         managedProjectId: a.parts.managedProjectId,

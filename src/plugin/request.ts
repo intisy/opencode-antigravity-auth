@@ -1460,6 +1460,17 @@ export function prepareAntigravityRequest(
         stripInjectedDebugFromRequestPayload(requestPayload);
         sanitizeRequestPayloadForAntigravity(requestPayload);
 
+        // DEBUG DUMP
+        try {
+          if (!isClaude && Array.isArray(requestPayload.contents)) {
+            const fs = require('fs');
+            fs.appendFileSync(
+              require('path').join(require('os').homedir(), '.config', 'opencode', 'gemini-payload-debug.log'),
+              "\n\n=== PAYLOAD BEFORE ===\n" + JSON.stringify(requestPayload.contents, null, 2)
+            );
+          }
+        } catch (e) {}
+
         // Gemini conversation turn sanitization (must run AFTER sanitizeRequestPayloadForAntigravity
         // so turns with only invalid parts e.g. type:"compaction" are already removed before
         // structural enforcement. Prevents the post-compaction Gemini 400 turn-ordering error
@@ -1477,6 +1488,17 @@ export function prepareAntigravityRequest(
 
         // Inject Antigravity system instruction with role "user" (CLIProxyAPI v6.6.89 compatibility)
         // This sets request.systemInstruction.role = "user" and request.systemInstruction.parts[0].text
+        // DEBUG DUMP 2
+        try {
+          if (!isClaude && Array.isArray(requestPayload.contents)) {
+            const fs = require('fs');
+            fs.appendFileSync(
+              require('path').join(require('os').homedir(), '.config', 'opencode', 'gemini-payload-debug.log'),
+              "\n\n=== PAYLOAD AFTER ===\n" + JSON.stringify(requestPayload.contents, null, 2)
+            );
+          }
+        } catch (e) {}
+        
         if (headerStyle === "antigravity") {
           const existingSystemInstruction = requestPayload.systemInstruction;
           if (existingSystemInstruction && typeof existingSystemInstruction === "object") {

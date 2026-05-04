@@ -187,6 +187,7 @@ export interface AccountMetadataV3 {
   addedAt: number;
   lastUsed: number;
   enabled?: boolean;
+  proxies?: string[];
   lastSwitchReason?: "rate-limit" | "initial" | "rotation";
   rateLimitResetTimes?: RateLimitStateV3;
   coolingDownUntil?: number;

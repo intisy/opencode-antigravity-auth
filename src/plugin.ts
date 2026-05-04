@@ -1542,6 +1542,9 @@ export const createAntigravityPlugin = (providerId: string) => async (
           };
 
           while (true) {
+            let loopLeasedAccountIndex: number | null = null;
+            let selectedProxy: string | undefined = undefined;
+            try {
             // Check for abort at the start of each iteration
             checkAborted();
             
@@ -1905,6 +1908,8 @@ export const createAntigravityPlugin = (providerId: string) => async (
             // - Claude models -> always use Antigravity
             let headerStyle = preferredHeaderStyle;
             pushDebug(`headerStyle=${headerStyle} explicit=${explicitQuota}`);
+            getLeaseTracker().lease(account.index);
+            loopLeasedAccountIndex = account.index;
             if (account.fingerprint) {
               pushDebug(`fingerprint: quotaUser=${account.fingerprint.quotaUser} deviceId=${account.fingerprint.deviceId.slice(0, 8)}...`);
             }
@@ -2006,6 +2011,10 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   },
                 );
 
+                selectedProxy = getProxyManager().selectBestProxy((account as any).proxies);
+                if (selectedProxy) {
+                  (prepared.init as any).dispatcher = new ProxyAgent(selectedProxy);
+                }
                 const originalUrl = toUrlString(input);
                 const resolvedUrl = toUrlString(prepared.request);
                 pushDebug(`endpoint=${currentEndpoint}`);
@@ -2113,6 +2122,9 @@ export const createAntigravityPlugin = (providerId: string) => async (
                       }
                   }
 
+                  if (selectedProxy) {
+                    getProxyManager().markCooldown(selectedProxy, 60000);
+                  }
                   // STRATEGY 2: RATE LIMIT EXCEEDED (RPM) / QUOTA EXHAUSTED / UNKNOWN
                   // Goal: Lock and Rotate (Standard Logic)
                   
@@ -2424,6 +2436,9 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
                 return transformedResponse;
               } catch (error) {
+                if (selectedProxy) {
+                  getProxyManager().markCooldown(selectedProxy, 60000);
+                }
                 // Refund token on network/API error (only if consumed)
                 if (tokenConsumed) {
                   getTokenTracker().refund(account.index);
@@ -2522,6 +2537,9 @@ export const createAntigravityPlugin = (providerId: string) => async (
             }
 
             throw lastError || new Error("All Antigravity accounts failed");
+            } finally {
+              if (loopLeasedAccountIndex !== null) getLeaseTracker().release(loopLeasedAccountIndex);
+            }
           }
         },
       };
@@ -3476,3 +3494,5 @@ export const __testExports = {
   resolveHeaderRoutingDecision,
   resolveQuotaFallbackHeaderStyle,
 };
+import { getLeaseTracker, getProxyManager } from "./plugin/rotation";
+import { ProxyAgent } from "undici";
