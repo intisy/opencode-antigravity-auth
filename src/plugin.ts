@@ -28,6 +28,7 @@ import {
 import {
   buildThinkingWarmupBody,
   isGenerativeLanguageRequest,
+  materializeGenerativeLanguageFetchInput,
   prepareAntigravityRequest,
   transformAntigravityResponse,
 } from "./plugin/request";
@@ -48,6 +49,7 @@ import { checkAccountsQuota } from "./plugin/quota";
 import { initDiskSignatureCache } from "./plugin/cache";
 import { createProactiveRefreshQueue, type ProactiveRefreshQueue } from "./plugin/refresh-queue";
 import { initLogger, createLogger } from "./plugin/logger";
+import { mergeAntigravityGoogleModelsIntoOpencodeConfig } from "./plugin/config/updater";
 import { initHealthTracker, getHealthTracker, initTokenTracker, getTokenTracker } from "./plugin/rotation";
 import { initAntigravityVersion } from "./plugin/version";
 import { executeSearch } from "./plugin/search";
@@ -1213,6 +1215,12 @@ function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
 export const createAntigravityPlugin = (providerId: string) => async (
   { client, directory }: PluginContext,
 ): Promise<PluginResult> => {
+  // Merge plugin model definitions into provider.google.models (additive; refreshes known ids).
+  // Non-blocking: startup should continue even if config update fails.
+  mergeAntigravityGoogleModelsIntoOpencodeConfig().catch((error) => {
+    log.debug("model-config-autosync-failed", { error: String(error) });
+  });
+
   // Load configuration from files and environment variables
   const config = loadConfig(directory);
   initRuntimeConfig(config);
@@ -1452,6 +1460,10 @@ export const createAntigravityPlugin = (providerId: string) => async (
       return {
         apiKey: "",
         async fetch(input, init) {
+          const materialized = await materializeGenerativeLanguageFetchInput(input, init);
+          input = materialized.input;
+          init = materialized.init;
+
           if (!isGenerativeLanguageRequest(input)) {
             return fetch(input, init);
           }

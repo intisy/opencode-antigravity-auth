@@ -621,6 +621,63 @@ function separateParts(parts: any[]): {
 }
 
 /**
+ * Some Gemini / Antigravity backends reject a single model turn that contains
+ * multiple parallel functionCall parts, even when the following user turn has
+ * matching functionResponses. Expand to strict call → response → call → response.
+ */
+export function expandMultiFunctionCallModelTurns(contents: any[]): any[] {
+  if (!Array.isArray(contents) || contents.length === 0) {
+    return contents;
+  }
+
+  const result: any[] = [];
+
+  for (let i = 0; i < contents.length; i++) {
+    const turn = contents[i];
+    if (!turn || typeof turn !== "object" || turn.role !== "model" || !Array.isArray(turn.parts)) {
+      result.push(turn);
+      continue;
+    }
+
+    const fcParts = turn.parts.filter(
+      (p: any) => p && typeof p === "object" && (p.functionCall || p.function_call),
+    );
+    if (fcParts.length <= 1) {
+      result.push(turn);
+      continue;
+    }
+
+    const next = contents[i + 1];
+    if (!next || next.role !== "user" || !Array.isArray(next.parts)) {
+      result.push(turn);
+      continue;
+    }
+
+    const frParts = next.parts.filter(
+      (p: any) => p && typeof p === "object" && (p.functionResponse || p.function_response),
+    );
+    if (frParts.length !== fcParts.length) {
+      result.push(turn);
+      continue;
+    }
+
+    const otherParts = turn.parts.filter(
+      (p: any) => !(p && typeof p === "object" && (p.functionCall || p.function_call)),
+    );
+
+    for (let j = 0; j < fcParts.length; j++) {
+      const modelParts = j === 0 && otherParts.length > 0 ? [...otherParts, fcParts[j]] : [fcParts[j]];
+      result.push({ ...turn, role: "model", parts: modelParts });
+      result.push({ role: "user", parts: [frParts[j]] });
+    }
+
+    i++;
+  }
+
+  return result;
+}
+
+/**
  * Sanitize Gemini conversation contents to enforce strict turn ordering.
  *
  * Gemini API rules:
@@ -643,14 +700,40 @@ export function sanitizeGeminiContents(contents: any[]): any[] {
     return contents;
   }
 
-  // Phase 1: Normalize roles and fix misplaced function parts
+  contents = expandMultiFunctionCallModelTurns(contents);
+
+  // Helper to merge consecutive text parts
+  const mergeTextParts = (parts: any[]) => {
+    const merged = [];
+    let currentText = "";
+    
+    for (const part of parts) {
+      if (part && typeof part.text === "string") {
+        currentText += (currentText ? "\n\n" : "") + part.text;
+      } else {
+        if (currentText) {
+          merged.push({ text: currentText });
+          currentText = "";
+        }
+        merged.push(part);
+      }
+    }
+    
+    if (currentText) {
+      merged.push({ text: currentText });
+    }
+    
+    return merged;
+  };
+
+  // Phase 1: Normalize roles, fix misplaced function parts, and merge text
   const normalized: ContentTurn[] = [];
 
   for (const content of contents) {
     if (!content || typeof content !== "object") continue;
 
     let role = content.role as string;
-    const parts = Array.isArray(content.parts) ? [...content.parts] : [];
+    const parts = Array.isArray(content.parts) ? mergeTextParts([...content.parts]) : [];
 
     if (parts.length === 0) continue;
 
@@ -725,7 +808,11 @@ export function sanitizeGeminiContents(contents: any[]): any[] {
     result.push(current);
   }
 
-  return result;
+  // Final safety pass: merge text parts again in case Phase 2 merges created multiple text parts
+  return result.map(turn => ({
+    ...turn,
+    parts: mergeTextParts(turn.parts)
+  }));
 }
 
 /**

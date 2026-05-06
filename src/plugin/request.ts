@@ -722,10 +722,104 @@ function generateSyntheticProjectId(): string {
 const STREAM_ACTION = "streamGenerateContent";
 
 /**
- * Detects requests headed to the Google Generative Language API so we can intercept them.
+ * Resolve a fetch() URL from RequestInfo. OpenCode / AI SDK often calls fetch(Request, init)
+ * instead of fetch(string, init); we must inspect the URL the same way in both cases.
  */
-export function isGenerativeLanguageRequest(input: RequestInfo): input is string {
-  return typeof input === "string" && input.includes("generativelanguage.googleapis.com");
+export function requestInfoToUrlString(input: RequestInfo): string | null {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (typeof Request !== "undefined" && input instanceof Request) {
+    return input.url;
+  }
+  if (typeof URL !== "undefined" && input instanceof URL) {
+    return input.href;
+  }
+  return null;
+}
+
+/**
+ * Detects requests headed to the Google Generative Language API (or Antigravity / Cloud Code PA)
+ * so we can intercept and rewrite them.
+ */
+export function isGenerativeLanguageRequest(input: RequestInfo): boolean {
+  const url = requestInfoToUrlString(input);
+  if (!url) {
+    return false;
+  }
+  return (
+    url.includes("generativelanguage.googleapis.com") ||
+    url.includes("cloudcode-pa")
+  );
+}
+
+function mergeInitFromRequest(req: Request, init?: RequestInit): RequestInit {
+  const next: RequestInit = { ...(init ?? {}) };
+  next.method = init?.method ?? req.method;
+  const headers = new Headers(req.headers);
+  if (init?.headers) {
+    new Headers(init.headers).forEach((value, key) => {
+      headers.set(key, value);
+    });
+  }
+  next.headers = headers;
+  next.signal = init?.signal ?? req.signal;
+  if (init?.referrer !== undefined) {
+    next.referrer = init.referrer;
+  }
+  if (init?.referrerPolicy !== undefined) {
+    next.referrerPolicy = init.referrerPolicy;
+  }
+  if (init?.mode !== undefined) {
+    next.mode = init.mode;
+  }
+  if (init?.credentials !== undefined) {
+    next.credentials = init.credentials;
+  }
+  if (init?.cache !== undefined) {
+    next.cache = init.cache;
+  }
+  if (init?.redirect !== undefined) {
+    next.redirect = init.redirect;
+  }
+  if (init?.integrity !== undefined) {
+    next.integrity = init.integrity;
+  }
+  if (init?.keepalive !== undefined) {
+    next.keepalive = init.keepalive;
+  }
+  return next;
+}
+
+/**
+ * OpenCode / AI SDK often calls fetch(Request, init) with the JSON body on the Request only.
+ * prepareAntigravityRequest reads init.body as a string; materialize so sanitization always runs.
+ */
+export async function materializeGenerativeLanguageFetchInput(
+  input: RequestInfo,
+  init?: RequestInit,
+): Promise<{ input: RequestInfo; init?: RequestInit }> {
+  if (typeof Request === "undefined" || !(input instanceof Request)) {
+    return { input, init };
+  }
+  if (!isGenerativeLanguageRequest(input)) {
+    return { input, init };
+  }
+  if (init !== undefined && init.body != null) {
+    return { input, init };
+  }
+  const method = (init?.method ?? input.method ?? "GET").toUpperCase();
+  if (method === "GET" || method === "HEAD") {
+    return { input: input.url, init: mergeInitFromRequest(input, init) };
+  }
+  try {
+    const bodyText = await input.clone().text();
+    const nextInit = mergeInitFromRequest(input, init);
+    nextInit.body = bodyText;
+    return { input: input.url, init: nextInit };
+  } catch {
+    return { input, init };
+  }
 }
 
 /**
@@ -793,7 +887,17 @@ export function prepareAntigravityRequest(
   // that are not required for Antigravity/Gemini CLI OAuth requests.
   headers.delete("x-goog-user-project");
 
-  const match = input.match(/\/models\/([^:]+):(\w+)/);
+  const inputUrl = requestInfoToUrlString(input);
+  if (!inputUrl) {
+    return {
+      request: input,
+      init: { ...baseInit, headers },
+      streaming: false,
+      headerStyle,
+    };
+  }
+
+  const match = inputUrl.match(/\/models\/([^:]+):(\w+)/);
   if (!match) {
     return {
       request: input,
@@ -891,6 +995,16 @@ export function prepareAntigravityRequest(
 
             // Step 3: Apply tool pairing fixes (ID assignment, response matching, orphan recovery)
             applyToolPairingFixes(req as Record<string, unknown>, true);
+          } else {
+            // OpenCode often sends an already-wrapped `{ project, request }` body. That path used to
+            // skip the unwrapped Gemini pipeline entirely, so compaction/tool turns reached the API
+            // unsanitized and triggered 400 "function call turn ordering" errors.
+            sanitizeRequestPayloadForAntigravity(req as Record<string, unknown>);
+            if (Array.isArray((req as any).contents)) {
+              (req as any).contents = sanitizeGeminiContents((req as any).contents as any[]);
+              (req as any).contents = fixGeminiToolPairing((req as any).contents as any[]);
+              (req as any).contents = sanitizeGeminiContents((req as any).contents as any[]);
+            }
           }
         }
 
