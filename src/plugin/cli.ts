@@ -30,7 +30,7 @@ export async function promptAddAnotherAccount(currentCount: number): Promise<boo
   }
 }
 
-export type LoginMode = "add" | "fresh" | "manage" | "check" | "verify" | "verify-all" | "cancel";
+export type LoginMode = "add" | "fresh" | "manage" | "check" | "verify" | "verify-all" | "proxies" | "cancel";
 
 export interface ExistingAccountInfo {
   email?: string;
@@ -141,6 +141,9 @@ export async function promptLoginMode(existingAccounts: ExistingAccountInfo[]): 
 
       case "delete-all":
         return { mode: "fresh", deleteAll: true };
+
+      case "proxies":
+        return { mode: "proxies" };
 
       case "configure-models": {
         const result = await updateOpencodeConfig();
