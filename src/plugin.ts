@@ -2070,7 +2070,28 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   tokenConsumed = getTokenTracker().consume(account.index);
                 }
 
-                const response = await fetch(prepared.request, prepared.init);
+                // Progress toasts for slow responses (user-visible heartbeat)
+                const PROGRESS_TOAST_INTERVAL_MS = 8000;
+                const fetchStartTime = Date.now();
+                let progressToastCount = 0;
+                const progressInterval = setInterval(async () => {
+                  progressToastCount++;
+                  const elapsedSec = Math.round((Date.now() - fetchStartTime) / 1000);
+                  await showToast(
+                    `⏳ Waiting for ${family} response... (${elapsedSec}s)`,
+                    "info",
+                  );
+                }, PROGRESS_TOAST_INTERVAL_MS);
+
+                let response: Response;
+                try {
+                  response = await fetch(prepared.request, prepared.init);
+                } finally {
+                  clearInterval(progressInterval);
+                }
+                if (Date.now() - fetchStartTime > PROGRESS_TOAST_INTERVAL_MS) {
+                  pushDebug(`fetch-slow: ${Date.now() - fetchStartTime}ms (${progressToastCount} progress toasts)`);
+                }
                 pushDebug(`status=${response.status} ${response.statusText}`);
 
 
@@ -2358,16 +2379,27 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 if (!response.ok) {
                   await logResponseBody(debugContext, response, response.status);
                   
-                  // Handle 400 "Prompt too long" with synthetic response to avoid session lock
+                  // Handle 400 errors with specific recovery strategies
                   if (response.status === 400) {
                     const cloned = response.clone();
                     const bodyText = await cloned.text();
+                    pushDebug(`400-error: crossFamilyFallback=${crossFamilyFallbackApplied} body=${bodyText.slice(0, 200)}`);
                     if (bodyText.includes("Prompt is too long") || bodyText.includes("prompt_too_long")) {
                       await showToast(
                         "Context too long - use /compact to reduce size",
                         "warning"
                       );
                       const errorMessage = `[Antigravity Error] Context is too long for this model.\n\nPlease use /compact to reduce context size, then retry your request.\n\nAlternatively, you can:\n- Use /clear to start fresh\n- Use /undo to remove recent messages\n- Switch to a model with larger context window`;
+                      return createSyntheticErrorResponse(errorMessage, prepared.requestedModel);
+                    }
+                    // Cross-family fallback 400: body format incompatible or model rejected request
+                    if (crossFamilyFallbackApplied) {
+                      const snippet = bodyText.slice(0, 300).replace(/\n/g, " ");
+                      await showToast(
+                        `Gemini fallback returned 400. Returning error to avoid loop.`,
+                        "error"
+                      );
+                      const errorMessage = `[Antigravity Error] Cross-family fallback failed (400 Bad Request).\n\nThe request could not be processed by the fallback model (${prepared.effectiveModel ?? "unknown"}).\nDetails: ${snippet}\n\nPlease retry or use /compact to simplify the context.`;
                       return createSyntheticErrorResponse(errorMessage, prepared.requestedModel);
                     }
                   }
@@ -2760,6 +2792,72 @@ export const createAntigravityPlugin = (providerId: string) => async (
                       await saveAccounts(existingStorage);
                       activeAccountManager?.setAccountEnabled(menuResult.toggleAccountIndex, acc.enabled);
                       console.log(`\nAccount ${acc.email || menuResult.toggleAccountIndex + 1} ${acc.enabled ? 'enabled' : 'disabled'}.\n`);
+                    }
+                  }
+                  continue;
+                }
+
+                if (menuResult.mode === "proxies") {
+                  const proxyIdx = menuResult.proxiesAccountIndex;
+                  const acc = proxyIdx !== undefined ? existingStorage.accounts[proxyIdx] : undefined;
+                  const label = acc?.email || (proxyIdx !== undefined ? `Account ${proxyIdx + 1}` : "All accounts");
+                  if (!acc && proxyIdx !== undefined) {
+                    console.log("\nAccount not found.\n");
+                    continue;
+                  }
+                  if (acc) {
+                    const currentProxies = acc.proxies ?? [];
+                    if (currentProxies.length > 0) {
+                      console.log(`\nCurrent proxies for ${label}:`);
+                      for (let pi = 0; pi < currentProxies.length; pi++) {
+                        console.log(`  ${pi + 1}. ${currentProxies[pi]}`);
+                      }
+                    } else {
+                      console.log(`\nNo proxies configured for ${label}.`);
+                    }
+                    const { createInterface: createRL } = await import("node:readline/promises");
+                    const { stdin: rlIn, stdout: rlOut } = await import("node:process");
+                    const rl = createRL({ input: rlIn, output: rlOut });
+                    try {
+                      console.log("\nOptions:");
+                      console.log("  (a) Add proxy URL");
+                      console.log("  (r) Remove proxy by number");
+                      console.log("  (c) Clear all proxies");
+                      console.log("  (b) Back\n");
+                      const choice = (await rl.question("Choice: ")).trim().toLowerCase();
+                      if (choice === "a" || choice === "add") {
+                        const proxyUrl = (await rl.question("Proxy URL (e.g. http://host:port or socks5://host:port): ")).trim();
+                        if (proxyUrl) {
+                          if (!acc.proxies) acc.proxies = [];
+                          if (acc.proxies.includes(proxyUrl)) {
+                            console.log("\nProxy already exists.\n");
+                          } else {
+                            acc.proxies.push(proxyUrl);
+                            await saveAccounts(existingStorage);
+                            console.log(`\n✓ Added proxy: ${proxyUrl}\n`);
+                          }
+                        }
+                      } else if (choice === "r" || choice === "remove") {
+                        if (currentProxies.length === 0) {
+                          console.log("\nNo proxies to remove.\n");
+                        } else {
+                          const numStr = (await rl.question("Proxy number to remove: ")).trim();
+                          const num = parseInt(numStr, 10);
+                          if (num >= 1 && num <= currentProxies.length) {
+                            const removed = acc.proxies!.splice(num - 1, 1)[0];
+                            await saveAccounts(existingStorage);
+                            console.log(`\n✓ Removed proxy: ${removed}\n`);
+                          } else {
+                            console.log("\nInvalid proxy number.\n");
+                          }
+                        }
+                      } else if (choice === "c" || choice === "clear") {
+                        acc.proxies = [];
+                        await saveAccounts(existingStorage);
+                        console.log("\n✓ All proxies cleared.\n");
+                      }
+                    } finally {
+                      rl.close();
                     }
                   }
                   continue;

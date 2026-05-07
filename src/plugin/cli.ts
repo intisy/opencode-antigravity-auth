@@ -137,6 +137,9 @@ export async function promptLoginMode(existingAccounts: ExistingAccountInfo[]): 
         if (accountAction === "verify") {
           return { mode: "verify", verifyAccountIndex: action.account.index };
         }
+        if (accountAction === "proxies") {
+          return { mode: "proxies", proxiesAccountIndex: action.account.index };
+        }
         continue;
       }
 
