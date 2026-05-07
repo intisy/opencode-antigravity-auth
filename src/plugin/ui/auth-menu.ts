@@ -25,7 +25,7 @@ export type AuthMenuAction =
   | { type: 'proxies' }
   | { type: 'cancel' };
 
-export type AccountAction = 'back' | 'delete' | 'refresh' | 'toggle' | 'verify' | 'cancel';
+export type AccountAction = 'back' | 'delete' | 'refresh' | 'toggle' | 'verify' | 'proxies' | 'cancel';
 
 function formatRelativeTime(timestamp: number | undefined): string {
   if (!timestamp) return 'never';
@@ -60,7 +60,6 @@ export async function showAuthMenu(accounts: AccountInfo[]): Promise<AuthMenuAct
     { label: 'Verify one account', value: { type: 'verify' }, color: 'cyan' },
     { label: 'Verify all accounts', value: { type: 'verify-all' }, color: 'cyan' },
     { label: 'Configure models in opencode.json', value: { type: 'configure-models' }, color: 'cyan' },
-    { label: 'Manage proxies', value: { type: 'proxies' }, color: 'cyan' },
 
     { label: '', value: { type: 'cancel' }, separator: true },
 
@@ -120,6 +119,7 @@ export async function showAccountDetails(account: AccountInfo): Promise<AccountA
       { label: 'Back', value: 'back' as const },
       { label: 'Verify account access', value: 'verify' as const, color: 'cyan' },
       { label: account.enabled === false ? 'Enable account' : 'Disable account', value: 'toggle' as const, color: account.enabled === false ? 'green' : 'yellow' },
+      { label: 'Manage proxies', value: 'proxies' as const, color: 'cyan' },
       { label: 'Refresh token', value: 'refresh' as const, color: 'cyan' },
       { label: 'Delete this account', value: 'delete' as const, color: 'red' },
     ], { 

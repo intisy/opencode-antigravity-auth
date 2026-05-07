@@ -48,6 +48,7 @@ export interface LoginMenuResult {
   refreshAccountIndex?: number;
   toggleAccountIndex?: number;
   verifyAccountIndex?: number;
+  proxiesAccountIndex?: number;
   verifyAll?: boolean;
   deleteAll?: boolean;
 }
