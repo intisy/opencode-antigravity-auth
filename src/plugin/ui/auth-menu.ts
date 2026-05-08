@@ -60,6 +60,7 @@ export async function showAuthMenu(accounts: AccountInfo[]): Promise<AuthMenuAct
     { label: 'Verify one account', value: { type: 'verify' }, color: 'cyan' },
     { label: 'Verify all accounts', value: { type: 'verify-all' }, color: 'cyan' },
     { label: 'Configure models in opencode.json', value: { type: 'configure-models' }, color: 'cyan' },
+    { label: 'Manage proxies', value: { type: 'proxies' }, color: 'cyan' },
 
     { label: '', value: { type: 'cancel' }, separator: true },
 

@@ -64,7 +64,7 @@ async function promptLoginModeFallback(existingAccounts: ExistingAccountInfo[]):
     console.log("");
 
     while (true) {
-      const answer = await rl.question("(a)dd new, (f)resh start, (c)heck quotas, (v)erify account, (va) verify all? [a/f/c/v/va]: ");
+      const answer = await rl.question("(a)dd new, (f)resh start, (c)heck quotas, (v)erify, (va) verify all, (p) proxies? [a/f/c/v/va/p]: ");
       const normalized = answer.trim().toLowerCase();
 
       if (normalized === "a" || normalized === "add") {
@@ -81,6 +81,9 @@ async function promptLoginModeFallback(existingAccounts: ExistingAccountInfo[]):
       }
       if (normalized === "va" || normalized === "verify-all" || normalized === "all") {
         return { mode: "verify-all", verifyAll: true };
+      }
+      if (normalized === "p" || normalized === "proxies") {
+        return { mode: "proxies" };
       }
 
       console.log("Please enter 'a', 'f', 'c', 'v', or 'va'.");

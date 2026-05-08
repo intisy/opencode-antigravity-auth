@@ -1606,6 +1606,15 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 );
               }
             }
+
+            // Cross-family bypass: when already switched to gemini but hybrid filters block all accounts
+            if (!account && crossFamilyFallbackApplied) {
+              const allEnabled = accountManager.getEnabledAccounts();
+              if (allEnabled.length > 0) {
+                account = allEnabled[0] ?? null;
+                if (account) pushDebug(`cross-family-bypass: forced pick idx=${account.index} (global filters overridden)`);
+              }
+            }
             
             if (!account) {
               // Cross-family fallback: if Claude is fully rate-limited, try Gemini
@@ -1631,6 +1640,14 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     altStyle, config.pid_offset_enabled,
                     100, softQuotaCacheTtlMs
                   );
+                }
+                // Last resort: bypass ALL strategy filters (health, tokens, cooldown, lease)
+                if (!geminiAccount) {
+                  const allEnabled = accountManager.getEnabledAccounts();
+                  if (allEnabled.length > 0) {
+                    geminiAccount = allEnabled[0] ?? null;
+                    if (geminiAccount) pushDebug(`cross-family-fallback: last-resort idx=${geminiAccount.index}`);
+                  }
                 }
                 
                 if (geminiAccount) {
@@ -1672,6 +1689,13 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 
                 await sleep(softQuotaWaitMs, abortSignal);
                 continue;
+              }
+
+              // If cross-family fallback already applied and we STILL can't find an account,
+              // return a synthetic error response instead of throwing (prevents OpenCode 5x retry)
+              if (crossFamilyFallbackApplied) {
+                const errorMessage = `[Antigravity Error] All accounts are temporarily unavailable.\n\nClaude is rate-limited and Gemini accounts are blocked by health/cooldown filters.\nPlease wait a few minutes and try again, or add more accounts with \`opencode auth login\`.`;
+                return createSyntheticErrorResponse(errorMessage, model ?? "unknown");
               }
 
               const strictWait = !allowQuotaFallback;
@@ -2808,7 +2832,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 }
 
                 if (menuResult.mode === "proxies") {
-                  const proxyIdx = menuResult.proxiesAccountIndex;
+                  const proxyIdx = menuResult.proxiesAccountIndex ?? (existingStorage.activeIndex ?? 0);
                   const acc = proxyIdx !== undefined ? existingStorage.accounts[proxyIdx] : undefined;
                   const label = acc?.email || (proxyIdx !== undefined ? `Account ${proxyIdx + 1}` : "All accounts");
                   if (!acc && proxyIdx !== undefined) {
