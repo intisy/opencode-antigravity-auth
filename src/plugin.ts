@@ -2055,6 +2055,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     claudeToolHardening: config.claude_tool_hardening,
                     claudePromptAutoCaching: config.claude_prompt_auto_caching,
                     fingerprint: account.fingerprint,
+                    debugGeminiPayloads: config.debug_gemini_payloads,
                   },
                 );
 

@@ -834,6 +834,8 @@ export interface PrepareRequestOptions {
   googleSearch?: GoogleSearchConfig;
   /** Per-account fingerprint for rate limit mitigation. Falls back to session fingerprint if not provided. */
   fingerprint?: Fingerprint;
+  /** Write Gemini payloads to debug log. Default: false */
+  debugGeminiPayloads?: boolean;
 }
 
 export function prepareAntigravityRequest(
@@ -1576,7 +1578,7 @@ export function prepareAntigravityRequest(
 
         // DEBUG DUMP
         try {
-          if (!isClaude && Array.isArray(requestPayload.contents)) {
+          if (!isClaude && Array.isArray(requestPayload.contents) && options?.debugGeminiPayloads) {
             const fs = require('fs');
             fs.appendFileSync(
               require('path').join(require('os').homedir(), '.config', 'opencode', 'gemini-payload-debug.log'),
@@ -1604,7 +1606,7 @@ export function prepareAntigravityRequest(
         // This sets request.systemInstruction.role = "user" and request.systemInstruction.parts[0].text
         // DEBUG DUMP 2
         try {
-          if (!isClaude && Array.isArray(requestPayload.contents)) {
+          if (!isClaude && Array.isArray(requestPayload.contents) && options?.debugGeminiPayloads) {
             const fs = require('fs');
             fs.appendFileSync(
               require('path').join(require('os').homedir(), '.config', 'opencode', 'gemini-payload-debug.log'),

@@ -106,6 +106,14 @@ export const AntigravityConfigSchema = z.object({
   debug_tui: z.boolean().default(false),
   
   /**
+   * If true, enables writing the raw payload sent to Gemini models
+   * to a debug log file (gemini-payload-debug.log).
+   * Env override: OPENCODE_ANTIGRAVITY_DEBUG_GEMINI_PAYLOADS=1
+   * @default false
+   */
+  debug_gemini_payloads: z.boolean().default(false),
+  
+  /**
    * Custom directory for debug logs.
    * Env override: OPENCODE_ANTIGRAVITY_LOG_DIR=/path/to/logs
    * @default OS-specific config dir + "/antigravity-logs"
@@ -463,6 +471,7 @@ export const DEFAULT_CONFIG: AntigravityConfig = {
   toast_scope: 'root_only',
   debug: false,
   debug_tui: false,
+  debug_gemini_payloads: false,
   keep_thinking: false,
   session_recovery: true,
   auto_resume: true,
