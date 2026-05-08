@@ -11,7 +11,7 @@ import {
 import { authorizeAntigravity, exchangeAntigravity } from "./antigravity/oauth";
 import type { AntigravityTokenExchangeResult } from "./antigravity/oauth";
 import { accessTokenExpired, isOAuthAuth, parseRefreshParts, formatRefreshParts } from "./plugin/auth";
-import { promptAddAnotherAccount, promptLoginMode, promptProjectId } from "./plugin/cli";
+import { promptAddAnotherAccount, promptLoginMode, promptProjectId, showProxyMenu, promptProxyUrl } from "./plugin/cli";
 import { ensureProjectContext } from "./plugin/project";
 import {
   startAntigravityDebugRequest, 
@@ -1474,7 +1474,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
           }
 
           if (accountManager.getAccountCount() === 0) {
-            throw new Error("No Antigravity accounts configured. Run `opencode auth login`.");
+            return createSyntheticErrorResponse("[Antigravity] No accounts configured. Run `opencode auth login`.", "unknown");
           }
 
           let urlString = toUrlString(input);
@@ -1570,7 +1570,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
             } = routingDecision;
             
             if (accountCount === 0) {
-              throw new Error("No Antigravity accounts available. Run `opencode auth login`.");
+              return createSyntheticErrorResponse("[Antigravity] No accounts available. Run `opencode auth login`.", model ?? "unknown");
             }
 
             const softQuotaCacheTtlMs = computeSoftQuotaCacheTtlMs(
@@ -1822,8 +1822,9 @@ export const createAntigravityPlugin = (providerId: string) => async (
                       log.error("Failed to clear stored Antigravity OAuth credentials", { error: String(storeError) });
                     }
 
-                    throw new Error(
-                      "All Antigravity accounts have invalid refresh tokens. Run `opencode auth login` and reauthenticate.",
+                    return createSyntheticErrorResponse(
+                      "[Antigravity] All accounts have invalid refresh tokens. Run `opencode auth login` and reauthenticate.",
+                      model ?? "unknown",
                     );
                   }
 
@@ -1847,7 +1848,8 @@ export const createAntigravityPlugin = (providerId: string) => async (
             if (!accessToken) {
               lastError = new Error("Missing access token");
               if (accountCount <= 1) {
-                throw lastError;
+                const errorMessage = "[Antigravity] Missing access token. Please run `opencode auth login` to re-authenticate.";
+                return createSyntheticErrorResponse(errorMessage, model ?? "unknown");
               }
               continue;
             }
@@ -2466,13 +2468,15 @@ export const createAntigravityPlugin = (providerId: string) => async (
                       continue; // Retry the endpoint loop
                     }
                     
-                    // Clean up and throw after max attempts
+                    // Clean up and return synthetic error after max attempts (prevents 5x retry)
                     emptyResponseAttempts.delete(emptyAttemptKey);
-                    throw new EmptyResponseError(
-                      "antigravity",
-                      prepared.effectiveModel ?? "unknown",
-                      currentAttempts,
-                    );
+                    {
+                      const emptyModel = prepared.effectiveModel ?? "unknown";
+                      return createSyntheticErrorResponse(
+                        "[Antigravity] Empty response from " + emptyModel + " after " + currentAttempts + " attempts. Please retry.",
+                        prepared.requestedModel,
+                      );
+                    }
                   }
                   
                   // Clean up successful attempt tracking
@@ -2589,7 +2593,10 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   );
                 }
 
-                throw lastError || new Error("All Antigravity endpoints failed");
+                {
+                  const msg = (lastError && lastError.message) || "All Antigravity endpoints failed";
+                  return createSyntheticErrorResponse("[Antigravity] " + msg, model ?? "unknown");
+                }
               }
 
               continue;
@@ -2842,29 +2849,15 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     continue;
                   }
                   if (acc) {
-                    const currentProxies = acc.proxies ?? [];
-                    if (currentProxies.length > 0) {
-                      console.log(`\nCurrent proxies for ${label}:`);
-                      for (let pi = 0; pi < currentProxies.length; pi++) {
-                        console.log(`  ${pi + 1}. ${currentProxies[pi]}`);
-                      }
-                    } else {
-                      console.log(`\nNo proxies configured for ${label}.`);
-                    }
-                    const { createInterface: createRL } = await import("node:readline/promises");
-                    const { stdin: rlIn, stdout: rlOut } = await import("node:process");
-                    const rl = createRL({ input: rlIn, output: rlOut });
-                    try {
-                      console.log("\nOptions:");
-                      console.log("  (a) Add proxy URL");
-                      console.log("  (r) Remove proxy by number");
-                      console.log("  (c) Clear all proxies");
-                      console.log("  (b) Back\n");
-                      const choice = (await rl.question("Choice: ")).trim().toLowerCase();
-                      if (choice === "a" || choice === "add") {
-                        const proxyUrl = (await rl.question("Proxy URL (e.g. http://host:port or socks5://host:port): ")).trim();
+                    while (true) {
+                      if (!acc.proxies) acc.proxies = [];
+                      const action = await showProxyMenu(label, acc.proxies);
+                      
+                      if (action.action === "back") {
+                        break;
+                      } else if (action.action === "add") {
+                        const proxyUrl = await promptProxyUrl();
                         if (proxyUrl) {
-                          if (!acc.proxies) acc.proxies = [];
                           if (acc.proxies.includes(proxyUrl)) {
                             console.log("\nProxy already exists.\n");
                           } else {
@@ -2873,27 +2866,15 @@ export const createAntigravityPlugin = (providerId: string) => async (
                             console.log(`\n✓ Added proxy: ${proxyUrl}\n`);
                           }
                         }
-                      } else if (choice === "r" || choice === "remove") {
-                        if (currentProxies.length === 0) {
-                          console.log("\nNo proxies to remove.\n");
-                        } else {
-                          const numStr = (await rl.question("Proxy number to remove: ")).trim();
-                          const num = parseInt(numStr, 10);
-                          if (num >= 1 && num <= currentProxies.length) {
-                            const removed = acc.proxies!.splice(num - 1, 1)[0];
-                            await saveAccounts(existingStorage);
-                            console.log(`\n✓ Removed proxy: ${removed}\n`);
-                          } else {
-                            console.log("\nInvalid proxy number.\n");
-                          }
-                        }
-                      } else if (choice === "c" || choice === "clear") {
+                      } else if (action.action === "remove") {
+                        const removed = acc.proxies.splice(action.index, 1)[0];
+                        await saveAccounts(existingStorage);
+                        console.log(`\n✓ Removed proxy: ${removed}\n`);
+                      } else if (action.action === "clear") {
                         acc.proxies = [];
                         await saveAccounts(existingStorage);
                         console.log("\n✓ All proxies cleared.\n");
                       }
-                    } finally {
-                      rl.close();
                     }
                   }
                   continue;
