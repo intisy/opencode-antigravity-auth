@@ -1621,6 +1621,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
               if (family === "claude" && config.cross_family_fallback && !crossFamilyFallbackApplied) {
                 const fallbackModel = config.cross_family_fallback_model ?? "antigravity-gemini-3.1-pro";
                 pushDebug(`cross-family-fallback: claude->gemini model=${fallbackModel}`);
+                await showToast(`🔄 Claude rate-limited. Attempting Gemini fallback...`, "info");
                 const newUrlString = urlString.replace(/\/models\/[^:\/?]+/, `/models/${fallbackModel}`);
                 const newFamily = getModelFamilyFromUrl(newUrlString) as ModelFamily;
                 const newModel = extractModelFromUrl(newUrlString);
@@ -1672,11 +1673,10 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     `All accounts over ${threshold}% quota threshold. Resets in ${waitTimeFormatted}.`,
                     "error"
                   );
-                  throw new Error(
-                    `Quota protection: All ${accountCount} account(s) are over ${threshold}% usage for ${family}. ` +
-                    `Quota resets in ${waitTimeFormatted}. ` +
-                    `Add more accounts, wait for quota reset, or set soft_quota_threshold_percent: 100 to disable.`
-                  );
+                  {
+                    const errorMessage = `[Antigravity] Quota protection: All ${accountCount} account(s) are over ${threshold}% usage for ${family}. Quota resets in ${waitTimeFormatted}.`;
+                    return createSyntheticErrorResponse(errorMessage, model ?? "unknown");
+                  }
                 }
                 
                 const waitSecValue = Math.max(1, Math.ceil(softQuotaWaitMs / 1000));
@@ -1729,11 +1729,10 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 );
                 
                 // Return a proper rate limit error response
-                throw new Error(
-                  `All ${accountCount} account(s) rate-limited for ${family}. ` +
-                  `Quota resets in ${waitTimeFormatted}. ` +
-                  `Add more accounts with \`opencode auth login\` or wait and retry.`
-                );
+                {
+                  const errorMessage = `[Antigravity] All ${accountCount} account(s) rate-limited for ${family}. Quota resets in ${waitTimeFormatted}. Add more accounts or wait and retry.`;
+                  return createSyntheticErrorResponse(errorMessage, model ?? "unknown");
+                }
               }
 
               if (!rateLimitToastShown) {
@@ -2614,7 +2613,10 @@ export const createAntigravityPlugin = (providerId: string) => async (
               );
             }
 
-            throw lastError || new Error("All Antigravity accounts failed");
+            {
+            const msg = lastError?.message ?? "All Antigravity accounts failed";
+            return createSyntheticErrorResponse("[Antigravity] " + msg, model ?? "unknown");
+          }
             } finally {
               if (loopLeasedAccountIndex !== null) getLeaseTracker().release(loopLeasedAccountIndex);
             }
