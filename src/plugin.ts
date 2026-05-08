@@ -1617,11 +1617,21 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 const newModel = extractModelFromUrl(newUrlString);
                 
                 // Try to find a Gemini account immediately
-                const geminiAccount = accountManager.getCurrentOrNextForFamily(
+                // Bypass soft quota for cross-family fallback - user has no other option
+                let geminiAccount = accountManager.getCurrentOrNextForFamily(
                   newFamily, newModel, config.account_selection_strategy,
                   preferredHeaderStyle, config.pid_offset_enabled,
-                  config.soft_quota_threshold_percent, softQuotaCacheTtlMs
+                  100, softQuotaCacheTtlMs
                 );
+                // If preferred header style fails, try alternate
+                if (!geminiAccount) {
+                  const altStyle = preferredHeaderStyle === "antigravity" ? "gemini-cli" : "antigravity";
+                  geminiAccount = accountManager.getCurrentOrNextForFamily(
+                    newFamily, newModel, config.account_selection_strategy,
+                    altStyle, config.pid_offset_enabled,
+                    100, softQuotaCacheTtlMs
+                  );
+                }
                 
                 if (geminiAccount) {
                   urlString = newUrlString;
