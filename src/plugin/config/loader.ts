@@ -8,7 +8,7 @@
  * 3. Project config file
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, copyFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { AntigravityConfigSchema, DEFAULT_CONFIG, type AntigravityConfig } from "./schema";
@@ -38,9 +38,27 @@ function getConfigDir(): string {
 
 /**
  * Get the user-level config file path.
+ * Prefers ~/.config/opencode/config/antigravity.json (new location).
+ * Falls back to ~/.config/opencode/antigravity.json (legacy) and auto-migrates.
  */
 export function getUserConfigPath(): string {
-  return join(getConfigDir(), "antigravity.json");
+  const configFolder = join(getConfigDir(), "config");
+  const newPath = join(configFolder, "antigravity.json");
+
+  if (existsSync(newPath)) return newPath;
+
+  const legacyPath = join(getConfigDir(), "antigravity.json");
+  if (existsSync(legacyPath)) {
+    // Auto-migrate: copy to new location
+    try {
+      if (!existsSync(configFolder)) mkdirSync(configFolder, { recursive: true });
+      copyFileSync(legacyPath, newPath);
+      return newPath;
+    } catch {}
+    return legacyPath;
+  }
+
+  return newPath;
 }
 
 /**
@@ -148,9 +166,10 @@ export function configExists(path: string): boolean {
 
 /**
  * Get the default logs directory.
+ * Uses ~/.config/opencode/logs/ (centralized logs folder).
  */
 export function getDefaultLogsDir(): string {
-  return join(getConfigDir(), "antigravity-logs");
+  return join(getConfigDir(), "logs");
 }
 
 let runtimeConfig: AntigravityConfig | null = null;
