@@ -23,7 +23,6 @@ const log = createLogger("storage");
  * These contain sensitive data or machine-specific state.
  */
 export const GITIGNORE_ENTRIES = [
-  ".gitignore",
   "antigravity-accounts.json",
   "antigravity-accounts.json.*.tmp",
   "antigravity-signature-cache.json",
@@ -44,7 +43,7 @@ export async function ensureGitignore(configDir: string): Promise<void> {
 
     try {
       content = await fs.readFile(gitignorePath, "utf-8");
-      existingLines = content.split("\n").map((line) => line.trim());
+      existingLines = content.split(/\r?\n/).map((line) => line.trim());
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         return;
@@ -95,7 +94,7 @@ export function ensureGitignoreSync(configDir: string): void {
 
     if (existsSync(gitignorePath)) {
       content = readFileSync(gitignorePath, "utf-8");
-      existingLines = content.split("\n").map((line) => line.trim());
+      existingLines = content.split(/\r?\n/).map((line) => line.trim());
     } else {
       content = "";
     }
@@ -187,6 +186,7 @@ export interface AccountMetadataV3 {
   addedAt: number;
   lastUsed: number;
   enabled?: boolean;
+  proxies?: string[];
   lastSwitchReason?: "rate-limit" | "initial" | "rotation";
   rateLimitResetTimes?: RateLimitStateV3;
   coolingDownUntil?: number;
@@ -269,7 +269,8 @@ function migrateLegacyWindowsConfig(): boolean {
     return false;
   }
 
-  const newPath = join(getConfigDir(), "antigravity-accounts.json");
+  const configSubDir = join(getConfigDir(), "config");
+  const newPath = join(configSubDir, "antigravity-accounts.json");
   const legacyPath = join(
     getLegacyWindowsConfigDir(),
     "antigravity-accounts.json",
@@ -281,10 +282,8 @@ function migrateLegacyWindowsConfig(): boolean {
   }
 
   try {
-    // Ensure new config directory exists
-    const newConfigDir = getConfigDir();
-
-    mkdirSync(newConfigDir, { recursive: true });
+    // Ensure config/ subdirectory exists
+    mkdirSync(configSubDir, { recursive: true });
 
     // Try rename first (atomic, but fails across filesystems)
     try {
@@ -313,7 +312,22 @@ function migrateLegacyWindowsConfig(): boolean {
  * On Windows, attempts to move legacy config to new path for alignment.
  */
 function getStoragePathWithMigration(): string {
-  const newPath = join(getConfigDir(), "antigravity-accounts.json");
+  const configSubDir = join(getConfigDir(), "config");
+  const newPath = join(configSubDir, "antigravity-accounts.json");
+
+  // Ensure config/ subdirectory exists
+  if (!existsSync(configSubDir)) {
+    try { mkdirSync(configSubDir, { recursive: true }); } catch {}
+  }
+
+  // Migrate from root ~/.config/opencode/ to config/ subfolder
+  const rootPath = join(getConfigDir(), "antigravity-accounts.json");
+  if (existsSync(rootPath) && !existsSync(newPath)) {
+    try {
+      copyFileSync(rootPath, newPath);
+      log.info("Migrated accounts to config/ subfolder", { from: rootPath, to: newPath });
+    } catch {}
+  }
 
   // On Windows, attempt to migrate legacy config to new location
   if (process.platform === "win32") {
@@ -790,3 +804,4 @@ export async function clearAccounts(): Promise<void> {
     }
   }
 }
+

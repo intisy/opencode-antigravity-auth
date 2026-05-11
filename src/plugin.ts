@@ -11,7 +11,7 @@ import {
 import { authorizeAntigravity, exchangeAntigravity } from "./antigravity/oauth";
 import type { AntigravityTokenExchangeResult } from "./antigravity/oauth";
 import { accessTokenExpired, isOAuthAuth, parseRefreshParts, formatRefreshParts } from "./plugin/auth";
-import { promptAddAnotherAccount, promptLoginMode, promptProjectId } from "./plugin/cli";
+import { promptAddAnotherAccount, promptLoginMode, promptProjectId, showProxyMenu, promptProxyUrl } from "./plugin/cli";
 import { ensureProjectContext } from "./plugin/project";
 import {
   startAntigravityDebugRequest, 
@@ -28,6 +28,7 @@ import {
 import {
   buildThinkingWarmupBody,
   isGenerativeLanguageRequest,
+  materializeGenerativeLanguageFetchInput,
   prepareAntigravityRequest,
   transformAntigravityResponse,
 } from "./plugin/request";
@@ -48,6 +49,7 @@ import { checkAccountsQuota } from "./plugin/quota";
 import { initDiskSignatureCache } from "./plugin/cache";
 import { createProactiveRefreshQueue, type ProactiveRefreshQueue } from "./plugin/refresh-queue";
 import { initLogger, createLogger } from "./plugin/logger";
+import { mergeAntigravityGoogleModelsIntoOpencodeConfig } from "./plugin/config/updater";
 import { initHealthTracker, getHealthTracker, initTokenTracker, getTokenTracker } from "./plugin/rotation";
 import { initAntigravityVersion } from "./plugin/version";
 import { executeSearch } from "./plugin/search";
@@ -1213,6 +1215,12 @@ function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
 export const createAntigravityPlugin = (providerId: string) => async (
   { client, directory }: PluginContext,
 ): Promise<PluginResult> => {
+  // Merge plugin model definitions into provider.google.models (additive; refreshes known ids).
+  // Non-blocking: startup should continue even if config update fails.
+  mergeAntigravityGoogleModelsIntoOpencodeConfig().catch((error) => {
+    log.debug("model-config-autosync-failed", { error: String(error) });
+  });
+
   // Load configuration from files and environment variables
   const config = loadConfig(directory);
   initRuntimeConfig(config);
@@ -1391,34 +1399,27 @@ export const createAntigravityPlugin = (providerId: string) => async (
       // Cache getAuth for tool access
       cachedGetAuth = getAuth;
 
-      const auth = await getAuth();
-      
-      // If OpenCode has no valid OAuth auth, clear any stale account storage
-      if (!isOAuthAuth(auth)) {
-        try {
-          await clearAccounts();
-        } catch {
-          // ignore
+      // Check initial auth — but do NOT bail with return {} if missing.
+      // Always install the fetch interceptor so requests work after OAuth login.
+      const initialAuth = await getAuth();
+      if (!isOAuthAuth(initialAuth)) {
+        try { await clearAccounts(); } catch { /* ignore */ }
+      }
+
+      // Lazy accountManager: eager if auth available at startup, lazy otherwise.
+      let accountManager: AccountManager | null = isOAuthAuth(initialAuth)
+        ? await AccountManager.loadFromDisk(initialAuth)
+        : null;
+      if (accountManager) {
+        activeAccountManager = accountManager;
+        if (accountManager.getAccountCount() > 0) {
+          accountManager.requestSaveToDisk();
         }
-        return {};
       }
 
-      // Validate that stored accounts are in sync with OpenCode's auth
-      // If OpenCode's refresh token doesn't match any stored account, clear stale storage
-      const authParts = parseRefreshParts(auth.refresh);
-      const storedAccounts = await loadAccounts();
-      
-      // Note: AccountManager now ensures the current auth is always included in accounts
-
-      const accountManager = await AccountManager.loadFromDisk(auth);
-      activeAccountManager = accountManager;
-      if (accountManager.getAccountCount() > 0) {
-        accountManager.requestSaveToDisk();
-      }
-
-      // Initialize proactive token refresh queue (ported from LLM-API-Key-Proxy)
+      // Initialize proactive token refresh queue
       let refreshQueue: ProactiveRefreshQueue | null = null;
-      if (config.proactive_token_refresh && accountManager.getAccountCount() > 0) {
+      if (accountManager && config.proactive_token_refresh && accountManager.getAccountCount() > 0) {
         refreshQueue = createProactiveRefreshQueue(client, providerId, {
           enabled: config.proactive_token_refresh,
           bufferSeconds: config.proactive_refresh_buffer_seconds,
@@ -1452,6 +1453,10 @@ export const createAntigravityPlugin = (providerId: string) => async (
       return {
         apiKey: "",
         async fetch(input, init) {
+          const materialized = await materializeGenerativeLanguageFetchInput(input, init);
+          input = materialized.input;
+          init = materialized.init;
+
           if (!isGenerativeLanguageRequest(input)) {
             return fetch(input, init);
           }
@@ -1461,13 +1466,30 @@ export const createAntigravityPlugin = (providerId: string) => async (
             return fetch(input, init);
           }
 
-          if (accountManager.getAccountCount() === 0) {
-            throw new Error("No Antigravity accounts configured. Run `opencode auth login`.");
+          // Lazy-init accountManager if not ready at startup (user logged in after launch)
+          if (!accountManager) {
+            accountManager = await AccountManager.loadFromDisk(latestAuth);
+            activeAccountManager = accountManager;
+            if (accountManager.getAccountCount() > 0) accountManager.requestSaveToDisk();
+            if (config.proactive_token_refresh && accountManager.getAccountCount() > 0) {
+              refreshQueue = createProactiveRefreshQueue(client, providerId, {
+                enabled: config.proactive_token_refresh,
+                bufferSeconds: config.proactive_refresh_buffer_seconds,
+                checkIntervalSeconds: config.proactive_refresh_check_interval_seconds,
+              });
+              refreshQueue.setAccountManager(accountManager);
+              refreshQueue.start();
+            }
           }
 
-          const urlString = toUrlString(input);
-          const family = getModelFamilyFromUrl(urlString);
-          const model = extractModelFromUrl(urlString);
+          if (accountManager.getAccountCount() === 0) {
+            return createSyntheticErrorResponse("[Antigravity] No accounts configured. Run `opencode auth login`.", "unknown");
+          }
+
+          let urlString = toUrlString(input);
+          let family = getModelFamilyFromUrl(urlString);
+          let model = extractModelFromUrl(urlString);
+          let crossFamilyFallbackApplied = false;
           const debugLines: string[] = [];
           const pushDebug = (line: string) => {
             if (!isDebugEnabled()) return;
@@ -1537,10 +1559,13 @@ export const createAntigravityPlugin = (providerId: string) => async (
           const hasOtherAccountWithAntigravity = (currentAccount: any): boolean => {
             if (family !== "gemini") return false;
             // Use AccountManager method which properly checks for disabled/cooling-down accounts
-            return accountManager.hasOtherAccountWithAntigravityAvailable(currentAccount.index, family, model);
+            return accountManager!.hasOtherAccountWithAntigravityAvailable(currentAccount.index, family, model);
           };
 
           while (true) {
+            let loopLeasedAccountIndex: number | null = null;
+            let selectedProxy: string | undefined = undefined;
+            try {
             // Check for abort at the start of each iteration
             checkAborted();
             
@@ -1554,7 +1579,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
             } = routingDecision;
             
             if (accountCount === 0) {
-              throw new Error("No Antigravity accounts available. Run `opencode auth login`.");
+              return createSyntheticErrorResponse("[Antigravity] No accounts available. Run `opencode auth login`.", model ?? "unknown");
             }
 
             const softQuotaCacheTtlMs = computeSoftQuotaCacheTtlMs(
@@ -1590,8 +1615,97 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 );
               }
             }
+
+            // Cross-family bypass: when already switched to gemini but hybrid filters block all accounts
+            if (!account && crossFamilyFallbackApplied) {
+              const allEnabled = accountManager.getEnabledAccounts();
+              if (allEnabled.length > 0) {
+                account = allEnabled[0] ?? null;
+                if (account) pushDebug(`cross-family-bypass: forced pick idx=${account.index} (global filters overridden)`);
+              }
+            }
             
             if (!account) {
+              // Cross-family fallback: if Claude is fully rate-limited, try Gemini
+              if (family === "claude" && config.cross_family_fallback && !crossFamilyFallbackApplied) {
+                const fallbackModel = config.cross_family_fallback_model ?? "antigravity-gemini-3.1-pro";
+                pushDebug(`cross-family-fallback: claude->gemini model=${fallbackModel}`);
+                await showToast(`🔄 Claude rate-limited. Attempting Gemini fallback...`, "info");
+                const newUrlString = urlString.replace(/\/models\/[^:\/?]+/, `/models/${fallbackModel}`);
+                const newFamily = getModelFamilyFromUrl(newUrlString) as ModelFamily;
+                const newModel = extractModelFromUrl(newUrlString);
+                
+                // Try to find a Gemini account immediately
+                // Bypass soft quota for cross-family fallback - user has no other option
+                let geminiAccount = accountManager.getCurrentOrNextForFamily(
+                  newFamily, newModel, config.account_selection_strategy,
+                  preferredHeaderStyle, config.pid_offset_enabled,
+                  100, softQuotaCacheTtlMs
+                );
+                // If preferred header style fails, try alternate
+                if (!geminiAccount) {
+                  const altStyle = preferredHeaderStyle === "antigravity" ? "gemini-cli" : "antigravity";
+                  geminiAccount = accountManager.getCurrentOrNextForFamily(
+                    newFamily, newModel, config.account_selection_strategy,
+                    altStyle, config.pid_offset_enabled,
+                    100, softQuotaCacheTtlMs
+                  );
+                }
+                // Last resort: bypass ALL strategy filters (health, tokens, cooldown, lease)
+                if (!geminiAccount) {
+                  const allEnabled = accountManager.getEnabledAccounts();
+                  if (allEnabled.length > 0) {
+                    geminiAccount = allEnabled[0] ?? null;
+                    if (geminiAccount) pushDebug(`cross-family-fallback: last-resort idx=${geminiAccount.index}`);
+                  }
+                }
+                
+                if (geminiAccount) {
+                  urlString = newUrlString;
+                  input = urlString as RequestInfo;
+                  family = newFamily;
+                  model = newModel;
+                  crossFamilyFallbackApplied = true;
+                  await showToast(`Claude rate-limited. Falling back to ${fallbackModel}.`, "warning");
+                  continue; // loop restarts with new urlString/family/model
+                }
+              }
+
+              // Cross-family fallback: if Gemini is fully rate-limited, try Claude
+              if (family === "gemini" && config.cross_family_fallback && !crossFamilyFallbackApplied) {
+                const fallbackModel = config.cross_family_fallback_claude_model ?? "antigravity-claude-sonnet-4-6";
+                pushDebug(`cross-family-fallback: gemini->claude model=${fallbackModel}`);
+                await showToast(`Gemini rate-limited. Attempting Claude fallback...`, "info");
+                const newUrlString = urlString.replace(/\/models\/[^:\/?]+/, `/models/${fallbackModel}`);
+                const newFamily = getModelFamilyFromUrl(newUrlString) as ModelFamily;
+                const newModel = extractModelFromUrl(newUrlString);
+
+                // Try to find a Claude account
+                let claudeAccount = accountManager.getCurrentOrNextForFamily(
+                  newFamily, newModel, config.account_selection_strategy,
+                  "antigravity", config.pid_offset_enabled,
+                  100, softQuotaCacheTtlMs
+                );
+                // Last resort: bypass ALL strategy filters
+                if (!claudeAccount) {
+                  const allEnabled = accountManager.getEnabledAccounts();
+                  if (allEnabled.length > 0) {
+                    claudeAccount = allEnabled[0] ?? null;
+                    if (claudeAccount) pushDebug(`cross-family-fallback: last-resort idx=${claudeAccount.index}`);
+                  }
+                }
+
+                if (claudeAccount) {
+                  urlString = newUrlString;
+                  input = urlString as RequestInfo;
+                  family = newFamily;
+                  model = newModel;
+                  crossFamilyFallbackApplied = true;
+                  await showToast(`Gemini rate-limited. Falling back to ${fallbackModel}.`, "warning");
+                  continue;
+                }
+              }
+
               if (accountManager.areAllAccountsOverSoftQuota(family, config.soft_quota_threshold_percent, softQuotaCacheTtlMs, model)) {
                 const threshold = config.soft_quota_threshold_percent;
                 const softQuotaWaitMs = accountManager.getMinWaitTimeForSoftQuota(family, threshold, softQuotaCacheTtlMs, model);
@@ -1603,11 +1717,10 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     `All accounts over ${threshold}% quota threshold. Resets in ${waitTimeFormatted}.`,
                     "error"
                   );
-                  throw new Error(
-                    `Quota protection: All ${accountCount} account(s) are over ${threshold}% usage for ${family}. ` +
-                    `Quota resets in ${waitTimeFormatted}. ` +
-                    `Add more accounts, wait for quota reset, or set soft_quota_threshold_percent: 100 to disable.`
-                  );
+                  {
+                    const errorMessage = `[Antigravity] Quota protection: All ${accountCount} account(s) are over ${threshold}% usage for ${family}. Quota resets in ${waitTimeFormatted}.`;
+                    return createSyntheticErrorResponse(errorMessage, model ?? "unknown");
+                  }
                 }
                 
                 const waitSecValue = Math.max(1, Math.ceil(softQuotaWaitMs / 1000));
@@ -1620,6 +1733,13 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 
                 await sleep(softQuotaWaitMs, abortSignal);
                 continue;
+              }
+
+              // If cross-family fallback already applied and we STILL can't find an account,
+              // return a synthetic error response instead of throwing (prevents OpenCode 5x retry)
+              if (crossFamilyFallbackApplied) {
+                const errorMessage = `[Antigravity Error] All accounts are temporarily unavailable.\n\nBoth Claude and Gemini accounts are blocked by rate limits or health/cooldown filters.\nPlease wait a few minutes and try again, or add more accounts with \`opencode auth login\`.`;
+                return createSyntheticErrorResponse(errorMessage, model ?? "unknown");
               }
 
               const strictWait = !allowQuotaFallback;
@@ -1653,11 +1773,10 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 );
                 
                 // Return a proper rate limit error response
-                throw new Error(
-                  `All ${accountCount} account(s) rate-limited for ${family}. ` +
-                  `Quota resets in ${waitTimeFormatted}. ` +
-                  `Add more accounts with \`opencode auth login\` or wait and retry.`
-                );
+                {
+                  const errorMessage = `[Antigravity] All ${accountCount} account(s) rate-limited for ${family}. Quota resets in ${waitTimeFormatted}. Add more accounts or wait and retry.`;
+                  return createSyntheticErrorResponse(errorMessage, model ?? "unknown");
+                }
               }
 
               if (!rateLimitToastShown) {
@@ -1747,8 +1866,9 @@ export const createAntigravityPlugin = (providerId: string) => async (
                       log.error("Failed to clear stored Antigravity OAuth credentials", { error: String(storeError) });
                     }
 
-                    throw new Error(
-                      "All Antigravity accounts have invalid refresh tokens. Run `opencode auth login` and reauthenticate.",
+                    return createSyntheticErrorResponse(
+                      "[Antigravity] All accounts have invalid refresh tokens. Run `opencode auth login` and reauthenticate.",
+                      model ?? "unknown",
                     );
                   }
 
@@ -1772,7 +1892,8 @@ export const createAntigravityPlugin = (providerId: string) => async (
             if (!accessToken) {
               lastError = new Error("Missing access token");
               if (accountCount <= 1) {
-                throw lastError;
+                const errorMessage = "[Antigravity] Missing access token. Please run `opencode auth login` to re-authenticate.";
+                return createSyntheticErrorResponse(errorMessage, model ?? "unknown");
               }
               continue;
             }
@@ -1878,6 +1999,8 @@ export const createAntigravityPlugin = (providerId: string) => async (
             // - Claude models -> always use Antigravity
             let headerStyle = preferredHeaderStyle;
             pushDebug(`headerStyle=${headerStyle} explicit=${explicitQuota}`);
+            getLeaseTracker().lease(account.index);
+            loopLeasedAccountIndex = account.index;
             if (account.fingerprint) {
               pushDebug(`fingerprint: quotaUser=${account.fingerprint.quotaUser} deviceId=${account.fingerprint.deviceId.slice(0, 8)}...`);
             }
@@ -1976,9 +2099,14 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     claudeToolHardening: config.claude_tool_hardening,
                     claudePromptAutoCaching: config.claude_prompt_auto_caching,
                     fingerprint: account.fingerprint,
+                    debugGeminiPayloads: config.debug_gemini_payloads,
                   },
                 );
 
+                selectedProxy = getProxyManager().selectBestProxy((account as any).proxies);
+                if (selectedProxy) {
+                  (prepared.init as any).proxy = selectedProxy;
+                }
                 const originalUrl = toUrlString(input);
                 const resolvedUrl = toUrlString(prepared.request);
                 pushDebug(`endpoint=${currentEndpoint}`);
@@ -2022,7 +2150,28 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   tokenConsumed = getTokenTracker().consume(account.index);
                 }
 
-                const response = await fetch(prepared.request, prepared.init);
+                // Progress toasts for slow responses (user-visible heartbeat)
+                const PROGRESS_TOAST_INTERVAL_MS = 8000;
+                const fetchStartTime = Date.now();
+                let progressToastCount = 0;
+                const progressInterval = setInterval(async () => {
+                  progressToastCount++;
+                  const elapsedSec = Math.round((Date.now() - fetchStartTime) / 1000);
+                  await showToast(
+                    `⏳ Waiting for ${family} response... (${elapsedSec}s)`,
+                    "info",
+                  );
+                }, PROGRESS_TOAST_INTERVAL_MS);
+
+                let response: Response;
+                try {
+                  response = await fetch(prepared.request, prepared.init);
+                } finally {
+                  clearInterval(progressInterval);
+                }
+                if (Date.now() - fetchStartTime > PROGRESS_TOAST_INTERVAL_MS) {
+                  pushDebug(`fetch-slow: ${Date.now() - fetchStartTime}ms (${progressToastCount} progress toasts)`);
+                }
                 pushDebug(`status=${response.status} ${response.statusText}`);
 
 
@@ -2086,6 +2235,9 @@ export const createAntigravityPlugin = (providerId: string) => async (
                       }
                   }
 
+                  if (selectedProxy) {
+                    getProxyManager().markCooldown(selectedProxy, 60000);
+                  }
                   // STRATEGY 2: RATE LIMIT EXCEEDED (RPM) / QUOTA EXHAUSTED / UNKNOWN
                   // Goal: Lock and Rotate (Standard Logic)
                   
@@ -2307,16 +2459,27 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 if (!response.ok) {
                   await logResponseBody(debugContext, response, response.status);
                   
-                  // Handle 400 "Prompt too long" with synthetic response to avoid session lock
+                  // Handle 400 errors with specific recovery strategies
                   if (response.status === 400) {
                     const cloned = response.clone();
                     const bodyText = await cloned.text();
+                    pushDebug(`400-error: crossFamilyFallback=${crossFamilyFallbackApplied} body=${bodyText.slice(0, 200)}`);
                     if (bodyText.includes("Prompt is too long") || bodyText.includes("prompt_too_long")) {
                       await showToast(
                         "Context too long - use /compact to reduce size",
                         "warning"
                       );
                       const errorMessage = `[Antigravity Error] Context is too long for this model.\n\nPlease use /compact to reduce context size, then retry your request.\n\nAlternatively, you can:\n- Use /clear to start fresh\n- Use /undo to remove recent messages\n- Switch to a model with larger context window`;
+                      return createSyntheticErrorResponse(errorMessage, prepared.requestedModel);
+                    }
+                    // Cross-family fallback 400: body format incompatible or model rejected request
+                    if (crossFamilyFallbackApplied) {
+                      const snippet = bodyText.slice(0, 300).replace(/\n/g, " ");
+                      await showToast(
+                        `Gemini fallback returned 400. Returning error to avoid loop.`,
+                        "error"
+                      );
+                      const errorMessage = `[Antigravity Error] Cross-family fallback failed (400 Bad Request).\n\nThe request could not be processed by the fallback model (${prepared.effectiveModel ?? "unknown"}).\nDetails: ${snippet}\n\nPlease retry or use /compact to simplify the context.`;
                       return createSyntheticErrorResponse(errorMessage, prepared.requestedModel);
                     }
                   }
@@ -2350,13 +2513,15 @@ export const createAntigravityPlugin = (providerId: string) => async (
                       continue; // Retry the endpoint loop
                     }
                     
-                    // Clean up and throw after max attempts
+                    // Clean up and return synthetic error after max attempts (prevents 5x retry)
                     emptyResponseAttempts.delete(emptyAttemptKey);
-                    throw new EmptyResponseError(
-                      "antigravity",
-                      prepared.effectiveModel ?? "unknown",
-                      currentAttempts,
-                    );
+                    {
+                      const emptyModel = prepared.effectiveModel ?? "unknown";
+                      return createSyntheticErrorResponse(
+                        "[Antigravity] Empty response from " + emptyModel + " after " + currentAttempts + " attempts. Please retry.",
+                        prepared.requestedModel,
+                      );
+                    }
                   }
                   
                   // Clean up successful attempt tracking
@@ -2397,6 +2562,9 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
                 return transformedResponse;
               } catch (error) {
+                if (selectedProxy) {
+                  getProxyManager().markCooldown(selectedProxy, 60000);
+                }
                 // Refund token on network/API error (only if consumed)
                 if (tokenConsumed) {
                   getTokenTracker().refund(account.index);
@@ -2470,7 +2638,10 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   );
                 }
 
-                throw lastError || new Error("All Antigravity endpoints failed");
+                {
+                  const msg = (lastError && lastError.message) || "All Antigravity endpoints failed";
+                  return createSyntheticErrorResponse("[Antigravity] " + msg, model ?? "unknown");
+                }
               }
 
               continue;
@@ -2494,7 +2665,13 @@ export const createAntigravityPlugin = (providerId: string) => async (
               );
             }
 
-            throw lastError || new Error("All Antigravity accounts failed");
+            {
+            const msg = lastError?.message ?? "All Antigravity accounts failed";
+            return createSyntheticErrorResponse("[Antigravity] " + msg, model ?? "unknown");
+          }
+            } finally {
+              if (loopLeasedAccountIndex !== null) getLeaseTracker().release(loopLeasedAccountIndex);
+            }
           }
         },
       };
@@ -2703,6 +2880,46 @@ export const createAntigravityPlugin = (providerId: string) => async (
                       await saveAccounts(existingStorage);
                       activeAccountManager?.setAccountEnabled(menuResult.toggleAccountIndex, acc.enabled);
                       console.log(`\nAccount ${acc.email || menuResult.toggleAccountIndex + 1} ${acc.enabled ? 'enabled' : 'disabled'}.\n`);
+                    }
+                  }
+                  continue;
+                }
+
+                if (menuResult.mode === "proxies") {
+                  const proxyIdx = menuResult.proxiesAccountIndex ?? (existingStorage.activeIndex ?? 0);
+                  const acc = proxyIdx !== undefined ? existingStorage.accounts[proxyIdx] : undefined;
+                  const label = acc?.email || (proxyIdx !== undefined ? `Account ${proxyIdx + 1}` : "All accounts");
+                  if (!acc && proxyIdx !== undefined) {
+                    console.log("\nAccount not found.\n");
+                    continue;
+                  }
+                  if (acc) {
+                    while (true) {
+                      if (!acc.proxies) acc.proxies = [];
+                      const action = await showProxyMenu(label, acc.proxies);
+                      
+                      if (action.action === "back") {
+                        break;
+                      } else if (action.action === "add") {
+                        const proxyUrl = await promptProxyUrl();
+                        if (proxyUrl) {
+                          if (acc.proxies.includes(proxyUrl)) {
+                            console.log("\nProxy already exists.\n");
+                          } else {
+                            acc.proxies.push(proxyUrl);
+                            await saveAccounts(existingStorage);
+                            console.log(`\n✓ Added proxy: ${proxyUrl}\n`);
+                          }
+                        }
+                      } else if (action.action === "remove") {
+                        const removed = acc.proxies.splice(action.index, 1)[0];
+                        await saveAccounts(existingStorage);
+                        console.log(`\n✓ Removed proxy: ${removed}\n`);
+                      } else if (action.action === "clear") {
+                        acc.proxies = [];
+                        await saveAccounts(existingStorage);
+                        console.log("\n✓ All proxies cleared.\n");
+                      }
                     }
                   }
                   continue;
@@ -3449,3 +3666,4 @@ export const __testExports = {
   resolveHeaderRoutingDecision,
   resolveQuotaFallbackHeaderStyle,
 };
+import { getLeaseTracker, getProxyManager } from "./plugin/rotation";

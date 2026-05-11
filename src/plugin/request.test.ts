@@ -4,6 +4,7 @@ import {
   transformAntigravityResponse,
   getPluginSessionId,
   isGenerativeLanguageRequest,
+  materializeGenerativeLanguageFetchInput,
   __testExports,
 } from "./request";
 import { DEFAULT_CONFIG } from "./config";
@@ -81,6 +82,14 @@ describe("request.ts", () => {
       expect(isGenerativeLanguageRequest("https://generativelanguage.googleapis.com/v1/models")).toBe(true);
     });
 
+    it("returns true for Antigravity daily-cloudcode internal endpoints", () => {
+      expect(
+        isGenerativeLanguageRequest(
+          "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        ),
+      ).toBe(true);
+    });
+
     it("returns false for other URLs", () => {
       expect(isGenerativeLanguageRequest("https://api.anthropic.com/v1/messages")).toBe(false);
     });
@@ -88,6 +97,40 @@ describe("request.ts", () => {
     it("returns false for non-string inputs", () => {
       expect(isGenerativeLanguageRequest({} as any)).toBe(false);
       expect(isGenerativeLanguageRequest(new Request("https://example.com"))).toBe(false);
+    });
+
+    it("returns true for Request whose URL is a Cloud Code PA endpoint", () => {
+      expect(
+        isGenerativeLanguageRequest(
+          new Request(
+            "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+            { method: "POST", body: "{}" },
+          ),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  describe("materializeGenerativeLanguageFetchInput", () => {
+    it("copies Request body into init when init.body is missing (generative URL)", async () => {
+      const url =
+        "https://daily-cloudcode-pa.sandbox.googleapis.com/v1/models/antigravity-gemini-3.1-pro:streamGenerateContent";
+      const json = JSON.stringify({ contents: [{ role: "user", parts: [{ text: "hi" }] }] });
+      const req = new Request(url, {
+        method: "POST",
+        body: json,
+        headers: { "Content-Type": "application/json" },
+      });
+      const { input, init } = await materializeGenerativeLanguageFetchInput(req, {});
+      expect(input).toBe(url);
+      expect(init?.body).toBe(json);
+    });
+
+    it("does not read body for non-generative Request", async () => {
+      const req = new Request("https://api.example.com/v1/chat", { method: "POST", body: "{}" });
+      const { input, init } = await materializeGenerativeLanguageFetchInput(req, {});
+      expect(input).toBe(req);
+      expect(init?.body).toBeUndefined();
     });
   });
 
@@ -980,8 +1023,13 @@ it("removes x-api-key header", () => {
       );
 
       const wrapped = JSON.parse(result.init.body as string);
-      expect(wrapped.request.contents).toHaveLength(1);
-      expect(wrapped.request.contents[0]).toEqual({
+      // sanitizeGeminiContents ensures history starts with a user turn (prepends filler if needed).
+      expect(wrapped.request.contents).toHaveLength(2);
+      expect(wrapped.request.contents[0]).toMatchObject({
+        role: "user",
+        parts: [{ text: "acknowledged" }],
+      });
+      expect(wrapped.request.contents[1]).toEqual({
         role: "model",
         parts: [{ text: "kept" }],
       });

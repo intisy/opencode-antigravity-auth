@@ -30,7 +30,7 @@ export async function promptAddAnotherAccount(currentCount: number): Promise<boo
   }
 }
 
-export type LoginMode = "add" | "fresh" | "manage" | "check" | "verify" | "verify-all" | "cancel";
+export type LoginMode = "add" | "fresh" | "manage" | "check" | "verify" | "verify-all" | "proxies" | "cancel";
 
 export interface ExistingAccountInfo {
   email?: string;
@@ -48,6 +48,7 @@ export interface LoginMenuResult {
   refreshAccountIndex?: number;
   toggleAccountIndex?: number;
   verifyAccountIndex?: number;
+  proxiesAccountIndex?: number;
   verifyAll?: boolean;
   deleteAll?: boolean;
 }
@@ -63,7 +64,7 @@ async function promptLoginModeFallback(existingAccounts: ExistingAccountInfo[]):
     console.log("");
 
     while (true) {
-      const answer = await rl.question("(a)dd new, (f)resh start, (c)heck quotas, (v)erify account, (va) verify all? [a/f/c/v/va]: ");
+      const answer = await rl.question("(a)dd new, (f)resh start, (c)heck quotas, (v)erify, (va) verify all, (p) proxies? [a/f/c/v/va/p]: ");
       const normalized = answer.trim().toLowerCase();
 
       if (normalized === "a" || normalized === "add") {
@@ -80,6 +81,9 @@ async function promptLoginModeFallback(existingAccounts: ExistingAccountInfo[]):
       }
       if (normalized === "va" || normalized === "verify-all" || normalized === "all") {
         return { mode: "verify-all", verifyAll: true };
+      }
+      if (normalized === "p" || normalized === "proxies") {
+        return { mode: "proxies" };
       }
 
       console.log("Please enter 'a', 'f', 'c', 'v', or 'va'.");
@@ -136,11 +140,17 @@ export async function promptLoginMode(existingAccounts: ExistingAccountInfo[]): 
         if (accountAction === "verify") {
           return { mode: "verify", verifyAccountIndex: action.account.index };
         }
+        if (accountAction === "proxies") {
+          return { mode: "proxies", proxiesAccountIndex: action.account.index };
+        }
         continue;
       }
 
       case "delete-all":
         return { mode: "fresh", deleteAll: true };
+
+      case "proxies":
+        return { mode: "proxies" };
 
       case "configure-models": {
         const result = await updateOpencodeConfig();
@@ -158,5 +168,5 @@ export async function promptLoginMode(existingAccounts: ExistingAccountInfo[]): 
   }
 }
 
-export { isTTY } from "./ui/auth-menu";
+export { isTTY, showProxyMenu, promptProxyUrl } from "./ui/auth-menu";
 export type { AccountStatus } from "./ui/auth-menu";
