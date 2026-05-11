@@ -23,7 +23,6 @@ const log = createLogger("storage");
  * These contain sensitive data or machine-specific state.
  */
 export const GITIGNORE_ENTRIES = [
-  ".gitignore",
   "antigravity-accounts.json",
   "antigravity-accounts.json.*.tmp",
   "antigravity-signature-cache.json",
@@ -44,7 +43,7 @@ export async function ensureGitignore(configDir: string): Promise<void> {
 
     try {
       content = await fs.readFile(gitignorePath, "utf-8");
-      existingLines = content.split("\n").map((line) => line.trim());
+      existingLines = content.split(/\r?\n/).map((line) => line.trim());
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         return;
@@ -95,7 +94,7 @@ export function ensureGitignoreSync(configDir: string): void {
 
     if (existsSync(gitignorePath)) {
       content = readFileSync(gitignorePath, "utf-8");
-      existingLines = content.split("\n").map((line) => line.trim());
+      existingLines = content.split(/\r?\n/).map((line) => line.trim());
     } else {
       content = "";
     }
@@ -805,3 +804,4 @@ export async function clearAccounts(): Promise<void> {
     }
   }
 }
+

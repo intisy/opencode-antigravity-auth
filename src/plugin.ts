@@ -1399,34 +1399,27 @@ export const createAntigravityPlugin = (providerId: string) => async (
       // Cache getAuth for tool access
       cachedGetAuth = getAuth;
 
-      const auth = await getAuth();
-      
-      // If OpenCode has no valid OAuth auth, clear any stale account storage
-      if (!isOAuthAuth(auth)) {
-        try {
-          await clearAccounts();
-        } catch {
-          // ignore
+      // Check initial auth — but do NOT bail with return {} if missing.
+      // Always install the fetch interceptor so requests work after OAuth login.
+      const initialAuth = await getAuth();
+      if (!isOAuthAuth(initialAuth)) {
+        try { await clearAccounts(); } catch { /* ignore */ }
+      }
+
+      // Lazy accountManager: eager if auth available at startup, lazy otherwise.
+      let accountManager: AccountManager | null = isOAuthAuth(initialAuth)
+        ? await AccountManager.loadFromDisk(initialAuth)
+        : null;
+      if (accountManager) {
+        activeAccountManager = accountManager;
+        if (accountManager.getAccountCount() > 0) {
+          accountManager.requestSaveToDisk();
         }
-        return {};
       }
 
-      // Validate that stored accounts are in sync with OpenCode's auth
-      // If OpenCode's refresh token doesn't match any stored account, clear stale storage
-      const authParts = parseRefreshParts(auth.refresh);
-      const storedAccounts = await loadAccounts();
-      
-      // Note: AccountManager now ensures the current auth is always included in accounts
-
-      const accountManager = await AccountManager.loadFromDisk(auth);
-      activeAccountManager = accountManager;
-      if (accountManager.getAccountCount() > 0) {
-        accountManager.requestSaveToDisk();
-      }
-
-      // Initialize proactive token refresh queue (ported from LLM-API-Key-Proxy)
+      // Initialize proactive token refresh queue
       let refreshQueue: ProactiveRefreshQueue | null = null;
-      if (config.proactive_token_refresh && accountManager.getAccountCount() > 0) {
+      if (accountManager && config.proactive_token_refresh && accountManager.getAccountCount() > 0) {
         refreshQueue = createProactiveRefreshQueue(client, providerId, {
           enabled: config.proactive_token_refresh,
           bufferSeconds: config.proactive_refresh_buffer_seconds,
@@ -1471,6 +1464,22 @@ export const createAntigravityPlugin = (providerId: string) => async (
           const latestAuth = await getAuth();
           if (!isOAuthAuth(latestAuth)) {
             return fetch(input, init);
+          }
+
+          // Lazy-init accountManager if not ready at startup (user logged in after launch)
+          if (!accountManager) {
+            accountManager = await AccountManager.loadFromDisk(latestAuth);
+            activeAccountManager = accountManager;
+            if (accountManager.getAccountCount() > 0) accountManager.requestSaveToDisk();
+            if (config.proactive_token_refresh && accountManager.getAccountCount() > 0) {
+              refreshQueue = createProactiveRefreshQueue(client, providerId, {
+                enabled: config.proactive_token_refresh,
+                bufferSeconds: config.proactive_refresh_buffer_seconds,
+                checkIntervalSeconds: config.proactive_refresh_check_interval_seconds,
+              });
+              refreshQueue.setAccountManager(accountManager);
+              refreshQueue.start();
+            }
           }
 
           if (accountManager.getAccountCount() === 0) {
@@ -1550,7 +1559,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
           const hasOtherAccountWithAntigravity = (currentAccount: any): boolean => {
             if (family !== "gemini") return false;
             // Use AccountManager method which properly checks for disabled/cooling-down accounts
-            return accountManager.hasOtherAccountWithAntigravityAvailable(currentAccount.index, family, model);
+            return accountManager!.hasOtherAccountWithAntigravityAvailable(currentAccount.index, family, model);
           };
 
           while (true) {

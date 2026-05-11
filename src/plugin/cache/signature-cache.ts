@@ -79,7 +79,8 @@ function getConfigDir(): string {
 }
 
 function getCacheFilePath(): string {
-  return join(getConfigDir(), "antigravity-signature-cache.json");
+  const configSubDir = join(getConfigDir(), "config");
+  return join(configSubDir, "antigravity-signature-cache.json");
 }
 
 // =============================================================================
