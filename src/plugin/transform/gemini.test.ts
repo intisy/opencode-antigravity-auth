@@ -11,6 +11,8 @@ import {
   applyGeminiTransforms,
   toGeminiSchema,
   wrapToolsAsFunctionDeclarations,
+  expandMultiFunctionCallModelTurns,
+  sanitizeGeminiContents,
 } from "./gemini";
 import type { RequestPayload } from "./types";
 
@@ -1475,6 +1477,64 @@ describe("transform/gemini", () => {
       expect(tools).toHaveLength(2);
       expect(tools[0]).toHaveProperty("functionDeclarations");
       expect(tools[1]).toHaveProperty("googleSearch");
+    });
+  });
+
+  describe("expandMultiFunctionCallModelTurns", () => {
+    it("splits one model turn with two functionCalls into alternating model/user pairs", () => {
+      const contents = [
+        {
+          role: "model",
+          parts: [
+            { text: "Doing two reads" },
+            { functionCall: { name: "read", args: { path: "a.txt" } } },
+            { functionCall: { name: "read", args: { path: "b.txt" } } },
+          ],
+        },
+        {
+          role: "user",
+          parts: [
+            { functionResponse: { name: "read", response: { result: "A" } } },
+            { functionResponse: { name: "read", response: { result: "B" } } },
+          ],
+        },
+      ];
+
+      const expanded = expandMultiFunctionCallModelTurns(contents);
+      expect(expanded).toHaveLength(4);
+      expect(expanded[0].role).toBe("model");
+      expect(expanded[0].parts).toHaveLength(2);
+      expect(expanded[1].role).toBe("user");
+      expect(expanded[1].parts).toHaveLength(1);
+      expect(expanded[2].role).toBe("model");
+      expect(expanded[2].parts).toHaveLength(1);
+      expect(expanded[3].role).toBe("user");
+      expect(expanded[3].parts).toHaveLength(1);
+    });
+
+    it("runs expand inside sanitizeGeminiContents", () => {
+      const contents = [
+        {
+          role: "user",
+          parts: [{ text: "hi" }],
+        },
+        {
+          role: "model",
+          parts: [
+            { functionCall: { name: "read", args: { path: "a" } } },
+            { functionCall: { name: "read", args: { path: "b" } } },
+          ],
+        },
+        {
+          role: "user",
+          parts: [
+            { functionResponse: { name: "read", response: { result: "1" } } },
+            { functionResponse: { name: "read", response: { result: "2" } } },
+          ],
+        },
+      ];
+      const out = sanitizeGeminiContents(contents);
+      expect(out.filter((t: any) => t.role === "model" && t.parts.some((p: any) => p.functionCall)).length).toBeGreaterThanOrEqual(2);
     });
   });
 });

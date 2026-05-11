@@ -55,6 +55,9 @@ export {
   buildImageGenerationConfig,
   normalizeGeminiTools,
   applyGeminiTransforms,
+  sanitizeGeminiContents,
+  fixGeminiToolPairing,
+  expandMultiFunctionCallModelTurns,
 } from "./gemini";
 export type { GeminiTransformOptions, GeminiTransformResult, ImageConfig } from "./gemini";
 
