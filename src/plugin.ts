@@ -2070,7 +2070,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
                 selectedProxy = getProxyManager().selectBestProxy((account as any).proxies);
                 if (selectedProxy) {
-                  (prepared.init as any).dispatcher = new ProxyAgent(selectedProxy);
+                  (prepared.init as any).proxy = selectedProxy;
                 }
                 const originalUrl = toUrlString(input);
                 const resolvedUrl = toUrlString(prepared.request);
@@ -3632,4 +3632,3 @@ export const __testExports = {
   resolveQuotaFallbackHeaderStyle,
 };
 import { getLeaseTracker, getProxyManager } from "./plugin/rotation";
-import { ProxyAgent } from "undici";
