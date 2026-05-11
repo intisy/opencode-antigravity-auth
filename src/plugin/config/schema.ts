@@ -296,7 +296,8 @@ export const AntigravityConfigSchema = z.object({
   cli_first: z.boolean().default(false),
   
   /**
-   * When all Claude accounts are rate-limited, automatically fall back to a Gemini model.
+   * When all accounts for one model family are rate-limited, automatically
+   * fall back to the other family (Claude <-> Gemini).
    * @default true
    */
   cross_family_fallback: z.boolean().default(true),
@@ -306,6 +307,12 @@ export const AntigravityConfigSchema = z.object({
    * @default "antigravity-gemini-3.1-pro"
    */
   cross_family_fallback_model: z.string().default("antigravity-gemini-3.1-pro"),
+
+  /**
+   * The Claude model to fall back to when Gemini is fully rate-limited.
+   * @default "antigravity-claude-sonnet-4-6"
+   */
+  cross_family_fallback_claude_model: z.string().default("antigravity-claude-sonnet-4-6"),
 
   /**
    * Strategy for selecting accounts when making requests.
@@ -489,6 +496,7 @@ export const DEFAULT_CONFIG: AntigravityConfig = {
   cli_first: false,
   cross_family_fallback: true,
   cross_family_fallback_model: "antigravity-gemini-3.1-pro",
+  cross_family_fallback_claude_model: "antigravity-claude-sonnet-4-6",
   account_selection_strategy: 'hybrid',
   pid_offset_enabled: false,
   switch_on_first_rate_limit: true,

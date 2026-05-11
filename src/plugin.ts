@@ -1671,6 +1671,41 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 }
               }
 
+              // Cross-family fallback: if Gemini is fully rate-limited, try Claude
+              if (family === "gemini" && config.cross_family_fallback && !crossFamilyFallbackApplied) {
+                const fallbackModel = config.cross_family_fallback_claude_model ?? "antigravity-claude-sonnet-4-6";
+                pushDebug(`cross-family-fallback: gemini->claude model=${fallbackModel}`);
+                await showToast(`Gemini rate-limited. Attempting Claude fallback...`, "info");
+                const newUrlString = urlString.replace(/\/models\/[^:\/?]+/, `/models/${fallbackModel}`);
+                const newFamily = getModelFamilyFromUrl(newUrlString) as ModelFamily;
+                const newModel = extractModelFromUrl(newUrlString);
+
+                // Try to find a Claude account
+                let claudeAccount = accountManager.getCurrentOrNextForFamily(
+                  newFamily, newModel, config.account_selection_strategy,
+                  "antigravity", config.pid_offset_enabled,
+                  100, softQuotaCacheTtlMs
+                );
+                // Last resort: bypass ALL strategy filters
+                if (!claudeAccount) {
+                  const allEnabled = accountManager.getEnabledAccounts();
+                  if (allEnabled.length > 0) {
+                    claudeAccount = allEnabled[0] ?? null;
+                    if (claudeAccount) pushDebug(`cross-family-fallback: last-resort idx=${claudeAccount.index}`);
+                  }
+                }
+
+                if (claudeAccount) {
+                  urlString = newUrlString;
+                  input = urlString as RequestInfo;
+                  family = newFamily;
+                  model = newModel;
+                  crossFamilyFallbackApplied = true;
+                  await showToast(`Gemini rate-limited. Falling back to ${fallbackModel}.`, "warning");
+                  continue;
+                }
+              }
+
               if (accountManager.areAllAccountsOverSoftQuota(family, config.soft_quota_threshold_percent, softQuotaCacheTtlMs, model)) {
                 const threshold = config.soft_quota_threshold_percent;
                 const softQuotaWaitMs = accountManager.getMinWaitTimeForSoftQuota(family, threshold, softQuotaCacheTtlMs, model);
@@ -1703,7 +1738,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
               // If cross-family fallback already applied and we STILL can't find an account,
               // return a synthetic error response instead of throwing (prevents OpenCode 5x retry)
               if (crossFamilyFallbackApplied) {
-                const errorMessage = `[Antigravity Error] All accounts are temporarily unavailable.\n\nClaude is rate-limited and Gemini accounts are blocked by health/cooldown filters.\nPlease wait a few minutes and try again, or add more accounts with \`opencode auth login\`.`;
+                const errorMessage = `[Antigravity Error] All accounts are temporarily unavailable.\n\nBoth Claude and Gemini accounts are blocked by rate limits or health/cooldown filters.\nPlease wait a few minutes and try again, or add more accounts with \`opencode auth login\`.`;
                 return createSyntheticErrorResponse(errorMessage, model ?? "unknown");
               }
 
