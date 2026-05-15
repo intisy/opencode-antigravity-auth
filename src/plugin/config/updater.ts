@@ -159,19 +159,6 @@ export async function updateOpencodeConfig(
       config.$schema = SCHEMA_URL;
     }
 
-    // Ensure plugin array exists and contains our plugin
-    if (!Array.isArray(config.plugin)) {
-      config.plugin = [];
-    }
-
-    // Check if plugin is already in the list (any version)
-    const hasPlugin = config.plugin.some((p) =>
-      p.includes("opencode-antigravity-auth")
-    );
-    if (!hasPlugin) {
-      config.plugin.push(PLUGIN_NAME);
-    }
-
     // Ensure provider.google structure exists
     if (!config.provider) {
       config.provider = {};
@@ -238,17 +225,6 @@ export async function mergeAntigravityGoogleModelsIntoOpencodeConfig(
 
     if (!config.$schema) {
       config.$schema = SCHEMA_URL;
-      needsWrite = true;
-    }
-
-    if (!Array.isArray(config.plugin)) {
-      config.plugin = [];
-      needsWrite = true;
-    }
-
-    const hasPlugin = config.plugin.some((p) => p.includes("opencode-antigravity-auth"));
-    if (!hasPlugin) {
-      config.plugin.push(PLUGIN_NAME);
       needsWrite = true;
     }
 

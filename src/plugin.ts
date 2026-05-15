@@ -2150,9 +2150,13 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 }, PROGRESS_TOAST_INTERVAL_MS);
 
                 let response: Response;
+                const fetchController = new AbortController();
+                const fetchTimeoutId = setTimeout(() => fetchController.abort(), 300000); // 5 minutes
+                const mergedInit = { ...prepared.init, signal: fetchController.signal };
                 try {
-                  response = await fetch(prepared.request, prepared.init);
+                  response = await fetch(prepared.request, mergedInit);
                 } finally {
+                  clearTimeout(fetchTimeoutId);
                   clearInterval(progressInterval);
                 }
                 if (Date.now() - fetchStartTime > PROGRESS_TOAST_INTERVAL_MS) {
