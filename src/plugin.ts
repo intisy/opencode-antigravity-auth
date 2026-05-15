@@ -63,6 +63,31 @@ import type {
   Provider,
 } from "./plugin/types";
 
+
+const DEFAULT_MODEL_RANKING = [
+  "antigravity-claude-opus-4-6-thinking",
+  "antigravity-gemini-3.1-pro",
+  "antigravity-claude-sonnet-4-6",
+  "antigravity-gemini-3-pro",
+  "antigravity-gemini-3-flash",
+];
+
+function resolveModelByRanking(
+  startIndex: number,
+  ranking: string[],
+  accountManager: AccountManager
+): string {
+  for (let i = startIndex; i < ranking.length; i++) {
+    const candidate = ranking[i];
+    if (!candidate) continue;
+    const candidateFamily = candidate.includes("claude") ? "claude" : "gemini";
+    if (accountManager.getMinWaitTimeForFamily(candidateFamily, candidate) === 0) {
+      return candidate;
+    }
+  }
+  return ranking[startIndex] ?? "antigravity-claude-opus-4-6-thinking";
+}
+
 const MAX_OAUTH_ACCOUNTS = 10;
 const MAX_WARMUP_SESSIONS = 1000;
 const MAX_WARMUP_RETRIES = 2;
@@ -1487,9 +1512,37 @@ export const createAntigravityPlugin = (providerId: string) => async (
           }
 
           let urlString = toUrlString(input);
-          let family = getModelFamilyFromUrl(urlString);
+          let family = getModelFamilyFromUrl(urlString) as ModelFamily;
           let model = extractModelFromUrl(urlString);
           let crossFamilyFallbackApplied = false;
+
+          const ranking = config.model_ranking ?? DEFAULT_MODEL_RANKING;
+
+          const stageMap: Record<string, number> = {
+  "antigravity-auto-best": 0,
+  "antigravity-auto-high": 1,
+  "antigravity-auto-balanced": 2,
+  "antigravity-auto-fastest": 3,
+};
+
+          let resolvedModel: string | null = null;
+
+          if (model && stageMap[model] !== undefined) {
+            resolvedModel = resolveModelByRanking(stageMap[model]!, ranking, accountManager);
+          } else if (config.auto_mode && model === "antigravity-auto") {
+            const stageIndex = config.auto_mode_stage
+              ? stageMap[`antigravity-auto-${config.auto_mode_stage}`] ?? 0
+              : 0;
+            resolvedModel = resolveModelByRanking(stageIndex, ranking, accountManager);
+          }
+
+          if (resolvedModel) {
+            urlString = urlString.replace(/\/models\/[^:\/?]+/, `/models/${resolvedModel}`);
+            input = urlString as RequestInfo;
+            family = getModelFamilyFromUrl(urlString) as ModelFamily;
+            model = resolvedModel;
+          }
+
           const debugLines: string[] = [];
           const pushDebug = (line: string) => {
             if (!isDebugEnabled()) return;
@@ -1615,98 +1668,27 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 );
               }
             }
-
-            // Cross-family bypass: when already switched to gemini but hybrid filters block all accounts
-            if (!account && crossFamilyFallbackApplied) {
-              const allEnabled = accountManager.getEnabledAccounts();
-              if (allEnabled.length > 0) {
-                account = allEnabled[0] ?? null;
-                if (account) pushDebug(`cross-family-bypass: forced pick idx=${account.index} (global filters overridden)`);
-              }
-            }
-            
-            if (!account) {
-              // Cross-family fallback: if Claude is fully rate-limited, try Gemini
-              if (family === "claude" && config.cross_family_fallback && !crossFamilyFallbackApplied) {
-                const fallbackModel = config.cross_family_fallback_model ?? "antigravity-gemini-3.1-pro";
-                pushDebug(`cross-family-fallback: claude->gemini model=${fallbackModel}`);
-                await showToast(`🔄 Claude rate-limited. Attempting Gemini fallback...`, "info");
-                const newUrlString = urlString.replace(/\/models\/[^:\/?]+/, `/models/${fallbackModel}`);
-                const newFamily = getModelFamilyFromUrl(newUrlString) as ModelFamily;
-                const newModel = extractModelFromUrl(newUrlString);
-                
-                // Try to find a Gemini account immediately
-                // Bypass soft quota for cross-family fallback - user has no other option
-                let geminiAccount = accountManager.getCurrentOrNextForFamily(
-                  newFamily, newModel, config.account_selection_strategy,
-                  preferredHeaderStyle, config.pid_offset_enabled,
-                  100, softQuotaCacheTtlMs
-                );
-                // If preferred header style fails, try alternate
-                if (!geminiAccount) {
-                  const altStyle = preferredHeaderStyle === "antigravity" ? "gemini-cli" : "antigravity";
-                  geminiAccount = accountManager.getCurrentOrNextForFamily(
-                    newFamily, newModel, config.account_selection_strategy,
-                    altStyle, config.pid_offset_enabled,
-                    100, softQuotaCacheTtlMs
-                  );
-                }
-                // Last resort: bypass ALL strategy filters (health, tokens, cooldown, lease)
-                if (!geminiAccount) {
-                  const allEnabled = accountManager.getEnabledAccounts();
-                  if (allEnabled.length > 0) {
-                    geminiAccount = allEnabled[0] ?? null;
-                    if (geminiAccount) pushDebug(`cross-family-fallback: last-resort idx=${geminiAccount.index}`);
-                  }
-                }
-                
-                if (geminiAccount) {
-                  urlString = newUrlString;
+              // When all accounts are rate-limited for current model AND fallback is enabled
+              if (!account && config.fallback_enabled) {
+                const ranking = config.model_ranking ?? DEFAULT_MODEL_RANKING;
+                const currentIndex = ranking.indexOf(model ?? "");
+                if (currentIndex !== -1 && currentIndex < ranking.length - 1) {
+                  // Try next model in ranking (one stage down)
+                  const nextModel = ranking[currentIndex + 1];
+                  if (!nextModel) break;
+                  const nextFamily: ModelFamily = nextModel.includes("claude") ? "claude" : "gemini";
+                  urlString = urlString.replace(/\/models\/[^:\/?]+/, `/models/${nextModel}`);
                   input = urlString as RequestInfo;
-                  family = newFamily;
-                  model = newModel;
+                  family = nextFamily;
+                  model = nextModel;
+                  await showToast(`Rate-limited. Falling back to ${nextModel}`, "warning");
                   crossFamilyFallbackApplied = true;
-                  await showToast(`Claude rate-limited. Falling back to ${fallbackModel}.`, "warning");
-                  continue; // loop restarts with new urlString/family/model
+                  continue; // restart loop with new model
                 }
               }
 
-              // Cross-family fallback: if Gemini is fully rate-limited, try Claude
-              if (family === "gemini" && config.cross_family_fallback && !crossFamilyFallbackApplied) {
-                const fallbackModel = config.cross_family_fallback_claude_model ?? "antigravity-claude-sonnet-4-6";
-                pushDebug(`cross-family-fallback: gemini->claude model=${fallbackModel}`);
-                await showToast(`Gemini rate-limited. Attempting Claude fallback...`, "info");
-                const newUrlString = urlString.replace(/\/models\/[^:\/?]+/, `/models/${fallbackModel}`);
-                const newFamily = getModelFamilyFromUrl(newUrlString) as ModelFamily;
-                const newModel = extractModelFromUrl(newUrlString);
-
-                // Try to find a Claude account
-                let claudeAccount = accountManager.getCurrentOrNextForFamily(
-                  newFamily, newModel, config.account_selection_strategy,
-                  "antigravity", config.pid_offset_enabled,
-                  100, softQuotaCacheTtlMs
-                );
-                // Last resort: bypass ALL strategy filters
-                if (!claudeAccount) {
-                  const allEnabled = accountManager.getEnabledAccounts();
-                  if (allEnabled.length > 0) {
-                    claudeAccount = allEnabled[0] ?? null;
-                    if (claudeAccount) pushDebug(`cross-family-fallback: last-resort idx=${claudeAccount.index}`);
-                  }
-                }
-
-                if (claudeAccount) {
-                  urlString = newUrlString;
-                  input = urlString as RequestInfo;
-                  family = newFamily;
-                  model = newModel;
-                  crossFamilyFallbackApplied = true;
-                  await showToast(`Gemini rate-limited. Falling back to ${fallbackModel}.`, "warning");
-                  continue;
-                }
-              }
-
-              if (accountManager.areAllAccountsOverSoftQuota(family, config.soft_quota_threshold_percent, softQuotaCacheTtlMs, model)) {
+              if (!account) {
+                if (accountManager.areAllAccountsOverSoftQuota(family, config.soft_quota_threshold_percent, softQuotaCacheTtlMs, model)) {
                 const threshold = config.soft_quota_threshold_percent;
                 const softQuotaWaitMs = accountManager.getMinWaitTimeForSoftQuota(family, threshold, softQuotaCacheTtlMs, model);
                 const maxWaitMs = (config.max_rate_limit_wait_seconds ?? 300) * 1000;
@@ -1811,10 +1793,14 @@ export const createAntigravityPlugin = (providerId: string) => async (
               // Calculate position among enabled accounts (not absolute index)
               const enabledAccounts = accountManager.getEnabledAccounts();
               const enabledPosition = enabledAccounts.findIndex(a => a.index === account.index) + 1;
-              await showToast(
-                `Using ${accountLabel} (${enabledPosition}/${accountCount})`,
-                "info"
-              );
+              let categoryString = "";
+              if (resolvedModel !== null) {
+                const rankIdx = ranking.indexOf(model ?? "");
+                const rankNames = ["Best", "High", "Balanced", "Fastest"];
+                const rankName = rankNames[rankIdx] ?? model;
+                categoryString = ` (Auto: ${rankName} - ${model})`;
+              }
+              await showToast(`Using ${accountLabel} (${enabledPosition}/${accountCount})${categoryString}`, "info");
               accountManager.markToastShown(account.index);
             }
 
@@ -2482,6 +2468,26 @@ export const createAntigravityPlugin = (providerId: string) => async (
                       const errorMessage = `[Antigravity Error] Cross-family fallback failed (400 Bad Request).\n\nThe request could not be processed by the fallback model (${prepared.effectiveModel ?? "unknown"}).\nDetails: ${snippet}\n\nPlease retry or use /compact to simplify the context.`;
                       return createSyntheticErrorResponse(errorMessage, prepared.requestedModel);
                     }
+
+                    // Generic 400: unknown error (thought_signature, model rejection, etc.)
+                    // Mark current account as cooling down and continue to retry with next account
+                    const snippet400 = bodyText.slice(0, 200).replace(/\n/g, " ");
+                    log.warn("Generic 400 from Antigravity, cooling down account and retrying", {
+                      model: prepared.effectiveModel,
+                      body: snippet400,
+                    });
+                    if (shouldShowRateLimitToast(`400: ${snippet400}`)) {
+                      await showToast(
+                        `Model returned 400 — retrying with next account`,
+                        "warning"
+                      );
+                    }
+                    // Cool down current account for 30s to avoid repeated 400s
+                    if (account) {
+                      accountManager.markAccountCoolingDown(account, 30_000, "project-error" as any);
+                    }
+                    shouldSwitchAccount = true;
+                    break;
                   }
                 }
                 
@@ -3667,3 +3673,4 @@ export const __testExports = {
   resolveQuotaFallbackHeaderStyle,
 };
 import { getLeaseTracker, getProxyManager } from "./plugin/rotation";
+

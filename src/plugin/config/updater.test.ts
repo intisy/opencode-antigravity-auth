@@ -410,8 +410,8 @@ describe("mergeAntigravityGoogleModelsIntoOpencodeConfig", () => {
     expect(result.success).toBe(true);
     const written = JSON.parse(fs.readFileSync(configPath, "utf-8"));
     const merged = written.provider.google.models["antigravity-gemini-3.1-pro"];
-    expect(merged.name).toBe(OPENCODE_MODEL_DEFINITIONS["antigravity-gemini-3.1-pro"].name);
-    expect(merged.limit).toEqual(OPENCODE_MODEL_DEFINITIONS["antigravity-gemini-3.1-pro"].limit);
+    expect(merged.name).toBe(OPENCODE_MODEL_DEFINITIONS["antigravity-gemini-3.1-pro"]!.name);
+    expect(merged.limit).toEqual(OPENCODE_MODEL_DEFINITIONS["antigravity-gemini-3.1-pro"]!.limit);
   });
 
   test("does not rewrite file when google models already match plugin definitions", async () => {

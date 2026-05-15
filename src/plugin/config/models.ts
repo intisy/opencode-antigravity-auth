@@ -38,6 +38,31 @@ const DEFAULT_MODALITIES: ModelModalities = {
 };
 
 export const OPENCODE_MODEL_DEFINITIONS: OpencodeModelDefinitions = {
+  "antigravity-auto": {
+    name: "Antigravity Auto",
+    limit: { context: 1048576, output: 65535 },
+    modalities: DEFAULT_MODALITIES,
+  },
+  "antigravity-auto-best": {
+    name: "Antigravity Auto (Best)",
+    limit: { context: 1048576, output: 65535 },
+    modalities: DEFAULT_MODALITIES,
+  },
+  "antigravity-auto-high": {
+    name: "Antigravity Auto (High)",
+    limit: { context: 1048576, output: 65535 },
+    modalities: DEFAULT_MODALITIES,
+  },
+  "antigravity-auto-balanced": {
+    name: "Antigravity Auto (Balanced)",
+    limit: { context: 1048576, output: 65535 },
+    modalities: DEFAULT_MODALITIES,
+  },
+  "antigravity-auto-fastest": {
+    name: "Antigravity Auto (Fastest)",
+    limit: { context: 1048576, output: 65535 },
+    modalities: DEFAULT_MODALITIES,
+  },
   "antigravity-gemini-3-pro": {
     name: "Gemini 3 Pro (Antigravity)",
     limit: { context: 1048576, output: 65535 },

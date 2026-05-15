@@ -326,6 +326,8 @@ function getStoragePathWithMigration(): string {
     try {
       copyFileSync(rootPath, newPath);
       log.info("Migrated accounts to config/ subfolder", { from: rootPath, to: newPath });
+      // Delete root file after successful migration to prevent dual-writes
+      try { unlinkSync(rootPath); } catch {}
     } catch {}
   }
 

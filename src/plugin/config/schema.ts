@@ -295,24 +295,32 @@ export const AntigravityConfigSchema = z.object({
    */
   cli_first: z.boolean().default(false),
   
+    /**
+   * Ordered list of all models from best to worst (defines the stages).
+   * Default: The 5 ranked models in order.
+   */
+  model_ranking: z.array(z.string()).optional(),
+
   /**
-   * When all accounts for one model family are rate-limited, automatically
-   * fall back to the other family (Claude <-> Gemini).
+   * Whether fallback is enabled at all.
+   * When true: if current model is rate-limited, fall back to next stage.
+   * When false: no fallback, just wait or fail.
+   * @default false
+   */
+  fallback_enabled: z.boolean().default(false),
+
+  /**
+   * Enable "auto" model mode. When a request targets "antigravity-auto",
+   * the plugin dynamically selects the best available model.
    * @default true
    */
-  cross_family_fallback: z.boolean().default(true),
+  auto_mode: z.boolean().default(true),
 
   /**
-   * The Gemini model to fall back to when Claude is fully rate-limited.
-   * @default "antigravity-gemini-3.1-pro"
+   * Auto mode: which "stage" to target.
+   * "stage1" = try stage 1, fall back down if rate-limited
    */
-  cross_family_fallback_model: z.string().default("antigravity-gemini-3.1-pro"),
-
-  /**
-   * The Claude model to fall back to when Gemini is fully rate-limited.
-   * @default "antigravity-claude-sonnet-4-6"
-   */
-  cross_family_fallback_claude_model: z.string().default("antigravity-claude-sonnet-4-6"),
+  auto_mode_stage: z.enum(["best","high","balanced","fastest"]).optional(),
 
   /**
    * Strategy for selecting accounts when making requests.
@@ -494,9 +502,8 @@ export const DEFAULT_CONFIG: AntigravityConfig = {
   max_rate_limit_wait_seconds: 300,
   quota_fallback: false,
   cli_first: false,
-  cross_family_fallback: true,
-  cross_family_fallback_model: "antigravity-gemini-3.1-pro",
-  cross_family_fallback_claude_model: "antigravity-claude-sonnet-4-6",
+  fallback_enabled: false,
+  auto_mode: true,
   account_selection_strategy: 'hybrid',
   pid_offset_enabled: false,
   switch_on_first_rate_limit: true,
