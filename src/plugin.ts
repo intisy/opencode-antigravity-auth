@@ -1620,6 +1620,10 @@ export const createAntigravityPlugin = (providerId: string) => async (
             let selectedProxy: string | undefined = undefined;
             try {
             // Check for abort at the start of each iteration
+            if (abortSignal?.aborted) {
+              pushDebug("request-aborted-by-client");
+              return createSyntheticErrorResponse("Request was aborted by OpenCode.", model ?? "unknown");
+            }
             checkAborted();
             
             const accountCount = accountManager.getAccountCount();
@@ -2152,8 +2156,23 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 }, PROGRESS_TOAST_INTERVAL_MS);
 
                 let response: Response;
-                const fetchController = new AbortController();
-                const fetchTimeoutId = setTimeout(() => fetchController.abort(), 300000); // 5 minutes
+                  const fetchController = new AbortController();
+                  const fetchTimeoutId = setTimeout(() => fetchController.abort(), 300000); // 5 minutes
+                  
+                let streamFinished = false;
+                
+                // Link Opencode's abort signal to our fetch controller
+                if (abortSignal) {
+                  abortSignal.addEventListener("abort", () => {
+                    fetchController.abort(new Error("Opencode aborted the request"));
+                    if (prepared.streaming && !streamFinished && response && response.ok) {
+                      pushDebug(`stream-aborted: penalizing account ${account.index} to force rotation`);
+                      accountManager.markAccountCoolingDown(account, 60000, "network-error");
+                      accountManager.requestSaveToDisk();
+                    }
+                  });
+                }
+                
                 const mergedInit = { ...prepared.init, signal: fetchController.signal };
                 try {
                   response = await fetch(prepared.request, mergedInit);
@@ -2550,10 +2569,11 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   prepared.endpoint,
                   prepared.effectiveModel,
                   prepared.sessionId,
-                  prepared.toolDebugMissing,
-                  prepared.toolDebugSummary,
-                  prepared.toolDebugPayload,
+                  missingParamsCount,
+                  toolDebugSummary,
+                  toolDebugPayload,
                   debugLines,
+                  () => { streamFinished = true; }
                 );
 
                 // Check for context errors and show appropriate toast
