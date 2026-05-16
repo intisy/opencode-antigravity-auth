@@ -2165,11 +2165,6 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 if (abortSignal) {
                   abortSignal.addEventListener("abort", () => {
                     fetchController.abort(new Error("Opencode aborted the request"));
-                    if (prepared.streaming && !streamFinished && response && response.ok) {
-                      pushDebug(`stream-aborted: penalizing account ${account.index} to force rotation`);
-                      accountManager.markAccountCoolingDown(account, 60000, "network-error");
-                      accountManager.requestSaveToDisk();
-                    }
                   });
                 }
                 

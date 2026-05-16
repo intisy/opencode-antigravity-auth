@@ -301,8 +301,30 @@ export function createStreamingTransformer(
   const debugState = { injected: false };
   let hasSeenUsageMetadata = false;
 
+  let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  let isDone = false;
+  let controllerRef: TransformStreamDefaultController<Uint8Array> | null = null;
+
+  const resetWatchdog = () => {
+    if (isDone || !controllerRef) return;
+    if (watchdogTimer) clearTimeout(watchdogTimer);
+    watchdogTimer = setTimeout(() => {
+      if (isDone) return;
+      isDone = true;
+      try {
+        controllerRef?.terminate();
+      } catch (e) {}
+      options.onComplete?.();
+    }, 30000); // 30 seconds of silence terminates the stream cleanly
+  };
+
   return new TransformStream({
+    start(controller) {
+      controllerRef = controller;
+      resetWatchdog();
+    },
     transform(chunk, controller) {
+      resetWatchdog();
       buffer += decoder.decode(chunk, { stream: true });
 
       const lines = buffer.split('\n');
@@ -327,6 +349,8 @@ export function createStreamingTransformer(
       }
     },
     flush(controller) {
+      isDone = true;
+      if (watchdogTimer) clearTimeout(watchdogTimer);
       buffer += decoder.decode();
 
       if (buffer) {
@@ -358,6 +382,8 @@ export function createStreamingTransformer(
         };
         controller.enqueue(encoder.encode(`\ndata: ${JSON.stringify(syntheticUsage)}\n\n`));
       }
+      
+      options.onComplete?.();
     },
   });
 }
