@@ -2586,7 +2586,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 // Handle fetch timeout (AbortError) - skip ALL remaining endpoints, rotate to next account
                 if (error instanceof Error && error.name === "AbortError") {
                   pushDebug(`fetch-timeout: account ${account.index} timed out after 5 minutes, rotating to next account`);
-                  accountManager.markAccountCoolingDown(account, 300000, "fetch-timeout");
+                  accountManager.markAccountCoolingDown(account, 300000, "network-error");
                   accountManager.markRateLimited(account, 300000, family, headerStyle, model);
                   await showToast(`⏳ Request timed out. Trying next account...`, "warning");
                   shouldSwitchAccount = true;
