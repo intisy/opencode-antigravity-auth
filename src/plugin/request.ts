@@ -1789,6 +1789,8 @@ export async function transformAntigravityResponse(
   toolDebugSummary?: string,
   toolDebugPayload?: string,
   debugLines?: string[],
+  onComplete?: () => void,
+  onWatchdogTimeout?: () => void,
 ): Promise<Response> {
   const contentType = response.headers.get("content-type") ?? "";
   const isJsonResponse = contentType.includes("application/json");
@@ -1836,7 +1838,8 @@ export async function transformAntigravityResponse(
         debugText,
         cacheSignatures,
         displayedThinkingHashes: effectiveModel && isGemini3Model(effectiveModel) ? sessionDisplayedThinkingHashes : undefined,
-        // injectSyntheticThinking removed - keep_thinking now unified with debug via debugText
+        onComplete,
+        onWatchdogTimeout,
       },
     );
     return new Response(response.body.pipeThrough(streamingTransformer), {

@@ -314,8 +314,9 @@ export function createStreamingTransformer(
       try {
         controllerRef?.terminate();
       } catch (e) {}
+      options.onWatchdogTimeout?.();
       options.onComplete?.();
-    }, 30000); // 30 seconds of silence terminates the stream cleanly
+    }, 45000); // 45 seconds of silence terminates the stream cleanly
   };
 
   return new TransformStream({
