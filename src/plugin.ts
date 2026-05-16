@@ -1581,7 +1581,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
           const toastScope = config.toast_scope;
 
           // Helper to show toast without blocking on abort (respects quiet_mode and toast_scope)
-          const showToast = async (message: string, variant: "info" | "warning" | "success" | "error") => {
+          const showToast = async (message: string, variant: "info" | "warning" | "success" | "error", forceChild = false) => {
             // Always log to debug regardless of toast filtering
             log.debug("toast", { message, variant, isChildSession, toastScope });
             
@@ -1589,7 +1589,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
             if (abortSignal?.aborted) return;
             
             // Filter toasts for child sessions when toast_scope is "root_only"
-            if (toastScope === "root_only" && isChildSession) {
+            if (toastScope === "root_only" && isChildSession && !forceChild) {
               log.debug("toast-suppressed-child-session", { message, variant, parentID: childSessionParentID });
               return;
             }
@@ -2137,15 +2137,17 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 }
 
                 // Progress toasts for slow responses (user-visible heartbeat)
-                const PROGRESS_TOAST_INTERVAL_MS = 8000;
+                const PROGRESS_TOAST_INTERVAL_MS = isChildSession ? 25000 : 8000;
                 const fetchStartTime = Date.now();
                 let progressToastCount = 0;
                 const progressInterval = setInterval(async () => {
                   progressToastCount++;
                   const elapsedSec = Math.round((Date.now() - fetchStartTime) / 1000);
+                  const prefix = isChildSession ? "[Subagent] " : "";
                   await showToast(
-                    `⏳ Waiting for ${family} response... (${elapsedSec}s)`,
+                    `⏳ ${prefix}Waiting for ${family} response... (${elapsedSec}s)`,
                     "info",
+                    true
                   );
                 }, PROGRESS_TOAST_INTERVAL_MS);
 
