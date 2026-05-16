@@ -2581,6 +2581,16 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   tokenConsumed = false;
                 }
 
+                // Handle fetch timeout (AbortError) - skip ALL remaining endpoints, rotate to next account
+                if (error instanceof Error && error.name === "AbortError") {
+                  pushDebug(`fetch-timeout: account ${account.index} timed out after 5 minutes, rotating to next account`);
+                  accountManager.markAccountCoolingDown(account, 300000, "fetch-timeout");
+                  accountManager.markRateLimited(account, 300000, family, headerStyle, model);
+                  await showToast(`⏳ Request timed out. Trying next account...`, "warning");
+                  shouldSwitchAccount = true;
+                  break; // break out of endpoint loop, go to next account
+                }
+
                 // Handle recoverable thinking errors - retry with forced recovery
                 if (error instanceof Error && error.message === "THINKING_RECOVERY_NEEDED") {
                   // Only retry once with forced recovery to avoid infinite loops
