@@ -104,22 +104,34 @@ export function calculateBackoffMs(
     return Math.max(retryAfterMs, MIN_BACKOFF_MS);
   }
   
+  let baseBackoff = UNKNOWN_BACKOFF;
+  
   switch (reason) {
     case "QUOTA_EXHAUSTED": {
       const index = Math.min(consecutiveFailures, QUOTA_EXHAUSTED_BACKOFFS.length - 1);
       return QUOTA_EXHAUSTED_BACKOFFS[index] ?? UNKNOWN_BACKOFF;
     }
     case "RATE_LIMIT_EXCEEDED":
-      return RATE_LIMIT_EXCEEDED_BACKOFF; // 30s
+      baseBackoff = 45_000; // Increased base default wait time
+      break;
     case "MODEL_CAPACITY_EXHAUSTED":
-      // Apply jitter to prevent thundering herd on capacity errors
-      return MODEL_CAPACITY_EXHAUSTED_BASE_BACKOFF + generateJitter(MODEL_CAPACITY_EXHAUSTED_JITTER_MAX);
+      baseBackoff = MODEL_CAPACITY_EXHAUSTED_BASE_BACKOFF + generateJitter(MODEL_CAPACITY_EXHAUSTED_JITTER_MAX);
+      break;
     case "SERVER_ERROR":
-      return SERVER_ERROR_BACKOFF; // 20s
+      baseBackoff = 30_000; // Increased base default
+      break;
     case "UNKNOWN":
     default:
-      return UNKNOWN_BACKOFF; // 60s
+      baseBackoff = 90_000; // Increased base default
+      break;
   }
+
+  // Apply exponential backoff multiplier: base * (1.5 ^ consecutiveFailures)
+  // Cap at 1 hour max backoff
+  const MAX_EXPONENTIAL_BACKOFF = 60 * 60 * 1000;
+  const multiplier = Math.pow(1.5, consecutiveFailures);
+  
+  return Math.min(Math.round(baseBackoff * multiplier), MAX_EXPONENTIAL_BACKOFF);
 }
 
 export type BaseQuotaKey = "claude" | "gemini-antigravity" | "gemini-cli";
@@ -641,23 +653,24 @@ export class AccountManager {
     account: ManagedAccount,
     family: ModelFamily,
     headerStyle: HeaderStyle,
-    model: string | null | undefined,
-    reason: RateLimitReason,
-    retryAfterMs?: number | null,
-    failureTtlMs: number = 3600_000, // Default 1 hour TTL
+    model?: string | null,
+    reason: RateLimitReason = "UNKNOWN",
+    retryAfterMs?: number,
+    ttlMs?: number
   ): number {
     const now = nowMs();
     
-    // TTL-based reset: if last failure was more than failureTtlMs ago, reset count
-    if (account.lastFailureTime !== undefined && (now - account.lastFailureTime) > failureTtlMs) {
-      account.consecutiveFailures = 0;
-    }
-    
+    // Apply exponential backoff based on failure count
     const failures = (account.consecutiveFailures ?? 0) + 1;
     account.consecutiveFailures = failures;
     account.lastFailureTime = now;
     
-    const backoffMs = calculateBackoffMs(reason, failures - 1, retryAfterMs);
+    const smartBackoffMs = calculateBackoffMs(reason, failures - 1, retryAfterMs);
+    
+    // Use the maximum of the server's explicit retry-after and our exponential backoff
+    const baseRetryMs = retryAfterMs && retryAfterMs > 0 ? Math.max(retryAfterMs, MIN_BACKOFF_MS) : 0;
+    const backoffMs = Math.max(smartBackoffMs, baseRetryMs * Math.pow(1.5, failures - 1));
+    
     const key = getQuotaKey(family, headerStyle, model);
     account.rateLimitResetTimes[key] = now + backoffMs;
     
@@ -950,7 +963,7 @@ export class AccountManager {
   ): number {
     const available = this.accounts.filter((a) => {
       clearExpiredRateLimits(a);
-      return a.enabled !== false && (strict && headerStyle
+      return a.enabled !== false && !this.isAccountCoolingDown(a) && (strict && headerStyle
         ? !isRateLimitedForHeaderStyle(a, family, headerStyle, model)
         : !isRateLimitedForFamily(a, family, model));
     });
@@ -960,13 +973,18 @@ export class AccountManager {
 
     const waitTimes: number[] = [];
     for (const a of this.accounts) {
+      if (a.enabled === false) continue;
+      
+      const coolWait = a.coolingDownUntil ? Math.max(0, a.coolingDownUntil - nowMs()) : 0;
+      let rateWait = Infinity;
+
       if (family === "claude") {
         const t = a.rateLimitResetTimes.claude;
-        if (t !== undefined) waitTimes.push(Math.max(0, t - nowMs()));
+        if (t !== undefined) rateWait = Math.max(0, t - nowMs());
       } else if (strict && headerStyle) {
         const key = getQuotaKey(family, headerStyle, model);
         const t = a.rateLimitResetTimes[key];
-        if (t !== undefined) waitTimes.push(Math.max(0, t - nowMs()));
+        if (t !== undefined) rateWait = Math.max(0, t - nowMs());
       } else {
         // For Gemini, account becomes available when EITHER pool expires for this model/family
         const antigravityKey = getQuotaKey(family, "antigravity", model);
@@ -975,11 +993,15 @@ export class AccountManager {
         const t1 = a.rateLimitResetTimes[antigravityKey];
         const t2 = a.rateLimitResetTimes[cliKey];
         
-        const accountWait = Math.min(
+        rateWait = Math.min(
           t1 !== undefined ? Math.max(0, t1 - nowMs()) : Infinity,
           t2 !== undefined ? Math.max(0, t2 - nowMs()) : Infinity
         );
-        if (accountWait !== Infinity) waitTimes.push(accountWait);
+      }
+      
+      const totalWait = Math.max(coolWait, rateWait === Infinity ? 0 : rateWait);
+      if (totalWait > 0) {
+        waitTimes.push(totalWait);
       }
     }
 
