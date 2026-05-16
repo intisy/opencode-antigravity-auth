@@ -431,17 +431,45 @@ function mergeAccountStorage(
     if (acc.refreshToken) {
       const existingAcc = accountMap.get(acc.refreshToken);
       if (existingAcc) {
+        // Handle rate limits safely (keep furthest into the future)
+        const mergedRateLimits: Record<string, number> = { ...(existingAcc.rateLimitResetTimes as any || {}) };
+        const incomingRateLimits = (acc.rateLimitResetTimes as any) || {};
+        for (const [key, resetTime] of Object.entries(incomingRateLimits)) {
+          if (typeof resetTime === 'number') {
+            const existingTime = mergedRateLimits[key] || 0;
+            mergedRateLimits[key] = Math.max(existingTime, resetTime);
+          }
+        }
+
+        // Handle cooldowns safely (keep furthest into the future)
+        const coolingDownUntil = Math.max(existingAcc.coolingDownUntil || 0, acc.coolingDownUntil || 0) || undefined;
+        let cooldownReason = undefined;
+        if (coolingDownUntil) {
+           cooldownReason = (coolingDownUntil === acc.coolingDownUntil) ? acc.cooldownReason : existingAcc.cooldownReason;
+        }
+
+        // Handle verification state
+        const verificationRequired = existingAcc.verificationRequired || acc.verificationRequired;
+        const verificationRequiredAt = Math.max(existingAcc.verificationRequiredAt || 0, acc.verificationRequiredAt || 0) || undefined;
+
         accountMap.set(acc.refreshToken, {
           ...existingAcc,
           ...acc,
           // Preserve manually configured projectId/managedProjectId if not in incoming
           projectId: acc.projectId ?? existingAcc.projectId,
           managedProjectId: acc.managedProjectId ?? existingAcc.managedProjectId,
-          rateLimitResetTimes: {
-            ...existingAcc.rateLimitResetTimes,
-            ...acc.rateLimitResetTimes,
-          },
+          
+          rateLimitResetTimes: mergedRateLimits,
           lastUsed: Math.max(existingAcc.lastUsed || 0, acc.lastUsed || 0),
+          coolingDownUntil,
+          cooldownReason,
+          verificationRequired,
+          verificationRequiredAt,
+          verificationRequiredReason: acc.verificationRequiredReason || existingAcc.verificationRequiredReason,
+          verificationUrl: acc.verificationUrl || existingAcc.verificationUrl,
+          
+          // Don't let an undefined 'enabled' in memory overwrite a false in existing
+          enabled: acc.enabled !== undefined ? acc.enabled : existingAcc.enabled,
         });
       } else {
         accountMap.set(acc.refreshToken, acc);
