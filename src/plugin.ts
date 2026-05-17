@@ -2568,12 +2568,19 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   prepared.toolDebugPayload,
                   debugLines,
                   () => { streamFinished = true; },
-                  () => {
+                  async () => {
                     // Watchdog timeout: stream was silent for 45s - penalize this account
                     // so the next automatic retry rotates to a different one
                     const watchdogCooldownMs = 120_000; // 2 minute cooldown
                     accountManager?.markAccountCoolingDown(account, watchdogCooldownMs, "network-error");
                     accountManager?.markRateLimited(account, watchdogCooldownMs, family, headerStyle, model);
+                    
+                    try {
+                      await accountManager?.saveToDisk();
+                    } catch (e) {
+                      pushDebug(`watchdog-timeout: failed to save to disk: ${e}`);
+                    }
+                    
                     pushDebug(`watchdog-timeout: account ${account.index} penalized for ${watchdogCooldownMs}ms, forcing rotation`);
                     showToast(
                       `Stream stalled on ${account.email} - rotating to next account`,

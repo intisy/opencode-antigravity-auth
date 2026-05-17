@@ -1790,7 +1790,7 @@ export async function transformAntigravityResponse(
   toolDebugPayload?: string,
   debugLines?: string[],
   onComplete?: () => void,
-  onWatchdogTimeout?: () => void,
+  onWatchdogTimeout?: () => Promise<void> | void,
 ): Promise<Response> {
   const contentType = response.headers.get("content-type") ?? "";
   const isJsonResponse = contentType.includes("application/json");

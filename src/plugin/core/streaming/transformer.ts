@@ -311,11 +311,18 @@ export function createStreamingTransformer(
     watchdogTimer = setTimeout(() => {
       if (isDone) return;
       isDone = true;
-      try {
-        controllerRef?.terminate();
-      } catch (e) {}
-      options.onWatchdogTimeout?.();
-      options.onComplete?.();
+      const finish = () => {
+        try {
+          controllerRef?.terminate();
+        } catch (e) {}
+        options.onComplete?.();
+      };
+      
+      if (options.onWatchdogTimeout) {
+        Promise.resolve(options.onWatchdogTimeout()).finally(finish);
+      } else {
+        finish();
+      }
     }, 45000); // 45 seconds of silence terminates the stream cleanly
   };
 

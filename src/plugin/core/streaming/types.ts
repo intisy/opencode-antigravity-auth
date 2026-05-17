@@ -23,7 +23,7 @@ export interface StreamingOptions {
   cacheSignatures?: boolean;
   displayedThinkingHashes?: Set<string>;
   onComplete?: () => void;
-  onWatchdogTimeout?: () => void;
+  onWatchdogTimeout?: () => Promise<void> | void;
 }
 
 export interface ThoughtBuffer {
