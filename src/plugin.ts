@@ -7,12 +7,12 @@ import {
   ANTIGRAVITY_PROVIDER_ID,
   getAntigravityHeaders,
   type HeaderStyle,
-} from "./constants";
-import { authorizeAntigravity, exchangeAntigravity } from "./antigravity/oauth";
-import type { AntigravityTokenExchangeResult } from "./antigravity/oauth";
-import { accessTokenExpired, isOAuthAuth, parseRefreshParts, formatRefreshParts } from "./plugin/auth";
-import { promptAddAnotherAccount, promptLoginMode, promptProjectId, showProxyMenu, promptProxyUrl } from "./plugin/cli";
-import { ensureProjectContext } from "./plugin/project";
+} from "../core/src/constants";
+import { authorizeAntigravity, exchangeAntigravity } from "../core/src/antigravity/oauth";
+import type { AntigravityTokenExchangeResult } from "../core/src/antigravity/oauth";
+import { accessTokenExpired, isOAuthAuth, parseRefreshParts, formatRefreshParts } from "../core/src/plugin/auth";
+import { promptAddAnotherAccount, promptLoginMode, promptProjectId, showProxyMenu, promptProxyUrl } from "../core/src/plugin/cli";
+import { ensureProjectContext } from "../core/src/plugin/project";
 import {
   startAntigravityDebugRequest, 
   logAntigravityDebugResponse,
@@ -24,35 +24,35 @@ import {
   isDebugEnabled,
   getLogFilePath,
   initializeDebug,
-} from "./plugin/debug";
+} from "../core/src/plugin/debug";
 import {
   buildThinkingWarmupBody,
   isGenerativeLanguageRequest,
   materializeGenerativeLanguageFetchInput,
   prepareAntigravityRequest,
   transformAntigravityResponse,
-} from "./plugin/request";
-import { resolveModelWithTier } from "./plugin/transform/model-resolver";
+} from "../core/src/plugin/request";
+import { resolveModelWithTier } from "../core/src/plugin/transform/model-resolver";
 import {
   isEmptyResponseBody,
   createSyntheticErrorResponse,
-} from "./plugin/request-helpers";
-import { EmptyResponseError } from "./plugin/errors";
-import { AntigravityTokenRefreshError, refreshAccessToken } from "./plugin/token";
-import { startOAuthListener, type OAuthListener } from "./plugin/server";
-import { clearAccounts, loadAccounts, saveAccounts, saveAccountsReplace } from "./plugin/storage";
-import { AccountManager, type ModelFamily, parseRateLimitReason, calculateBackoffMs, computeSoftQuotaCacheTtlMs } from "./plugin/accounts";
+} from "../core/src/plugin/request-helpers";
+import { EmptyResponseError } from "../core/src/plugin/errors";
+import { AntigravityTokenRefreshError, refreshAccessToken } from "../core/src/plugin/token";
+import { startOAuthListener, type OAuthListener } from "../core/src/plugin/server";
+import { clearAccounts, loadAccounts, saveAccounts, saveAccountsReplace } from "../core/src/plugin/storage";
+import { AccountManager, type ModelFamily, parseRateLimitReason, calculateBackoffMs, computeSoftQuotaCacheTtlMs } from "../core/src/plugin/accounts";
 import { createAutoUpdateCheckerHook } from "./hooks/auto-update-checker";
-import { loadConfig, initRuntimeConfig, type AntigravityConfig } from "./plugin/config";
-import { createSessionRecoveryHook, getRecoverySuccessToast } from "./plugin/recovery";
-import { checkAccountsQuota } from "./plugin/quota";
-import { initDiskSignatureCache } from "./plugin/cache";
-import { createProactiveRefreshQueue, type ProactiveRefreshQueue } from "./plugin/refresh-queue";
-import { initLogger, createLogger } from "./plugin/logger";
-import { mergeAntigravityGoogleModelsIntoOpencodeConfig } from "./plugin/config/updater";
-import { initHealthTracker, getHealthTracker, initTokenTracker, getTokenTracker } from "./plugin/rotation";
-import { initAntigravityVersion } from "./plugin/version";
-import { executeSearch } from "./plugin/search";
+import { loadConfig, initRuntimeConfig, type AntigravityConfig } from "../core/src/plugin/config";
+import { createSessionRecoveryHook, getRecoverySuccessToast } from "../core/src/plugin/recovery";
+import { checkAccountsQuota } from "../core/src/plugin/quota";
+import { initDiskSignatureCache } from "../core/src/plugin/cache";
+import { createProactiveRefreshQueue, type ProactiveRefreshQueue } from "../core/src/plugin/refresh-queue";
+import { initLogger, createLogger } from "../core/src/plugin/logger";
+import { mergeAntigravityGoogleModelsIntoOpencodeConfig } from "../core/src/plugin/config/updater";
+import { initHealthTracker, getHealthTracker, initTokenTracker, getTokenTracker } from "../core/src/plugin/rotation";
+import { initAntigravityVersion } from "../core/src/plugin/version";
+import { executeSearch } from "../core/src/plugin/search";
 import type {
   GetAuth,
   LoaderResult,
@@ -61,7 +61,7 @@ import type {
   PluginResult,
   ProjectContextResult,
   Provider,
-} from "./plugin/types";
+} from "../core/src/plugin/types";
 
 
 const DEFAULT_MODEL_RANKING = [
@@ -116,7 +116,7 @@ let softQuotaToastShown = false;
 let rateLimitToastShown = false;
 
 // Module-level reference to AccountManager for access from auth.login
-let activeAccountManager: import("./plugin/accounts").AccountManager | null = null;
+let activeAccountManager: import("../core/src/plugin/accounts").AccountManager | null = null;
 
 function cleanupToastCooldowns(): void {
   if (rateLimitToastCooldowns.size > MAX_TOAST_COOLDOWN_ENTRIES) {
@@ -3721,5 +3721,5 @@ export const __testExports = {
   resolveHeaderRoutingDecision,
   resolveQuotaFallbackHeaderStyle,
 };
-import { getLeaseTracker, getProxyManager } from "./plugin/rotation";
+import { getLeaseTracker, getProxyManager } from "../core/src/plugin/rotation";
 

@@ -1,4 +1,4 @@
-import { debugLogToFile } from "../../plugin/debug";
+import { debugLogToFile } from "../../../core/src/plugin/debug";
 
 const AUTO_UPDATE_LOG_PREFIX = "[auto-update-checker]";
 
