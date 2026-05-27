@@ -411,7 +411,7 @@ async function main(): Promise<void> {
           } else if (action === "setkey") {
             const readline = await import("readline");
             const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-            const newKey = await new Promise<string>(resolve => rl.question(Enter API Key or URL for  (leave empty to cancel): , resolve));
+            const newKey = await new Promise<string>(resolve => rl.question('Enter API Key or URL for ' + prov.name + ' (leave empty to cancel): ', resolve));
             rl.close();
             if (newKey && newKey.trim()) {
               prov.apiKey = newKey.trim();
@@ -542,4 +542,6 @@ main().catch((err) => {
   console.error("\x1b[31mFatal error:\x1b[0m", err);
   process.exit(1);
 });
+
+
 
