@@ -5,12 +5,12 @@ export { AntigravityCLIOAuthPlugin, GoogleOAuthPlugin };
 export {
   authorizeAntigravity,
   exchangeAntigravity,
-} from "./src/antigravity/oauth";
+} from "./core/src/antigravity/oauth";
 
 export type {
   AntigravityAuthorization,
   AntigravityTokenExchangeResult,
-} from "./src/antigravity/oauth";
+} from "./core/src/antigravity/oauth";
 
 export default AntigravityCLIOAuthPlugin;
 
